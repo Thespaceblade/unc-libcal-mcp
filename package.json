@@ -1,0 +1,35 @@
+{
+  "name": "unc-libcal-mcp",
+  "version": "0.3.0",
+  "description": "MCP server to book UNC Davis Library spaces and add them to Apple Calendar",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Thespaceblade/unc-libcal-mcp.git"
+  },
+  "keywords": ["mcp", "unc", "libcal", "library", "booking", "davis"],
+  "type": "module",
+  "bin": {
+    "unc-libcal-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test 'dist/libcal/**/*.test.js'",
+    "test:integration": "npm run build && node --test 'dist/libcal/integration.test.js'",
+    "start": "node dist/index.js",
+    "login": "node dist/login.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "playwright": "^1.52.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
