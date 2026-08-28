@@ -3,7 +3,8 @@ import { BASE_URL } from "../libcal/constants.js";
 
 /** Map item IDs to human-readable names from the availability grid headers. */
 export async function loadSpaceNames(page: Page, categoryPath: string): Promise<Map<number, string>> {
-  await page.goto(`${BASE_URL}${categoryPath}`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_URL}${categoryPath}`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1000);
 
   const names = await page.evaluate(() => {
     const result = new Map<number, string>();
@@ -15,7 +16,9 @@ export async function loadSpaceNames(page: Page, categoryPath: string): Promise<
 
     // LibCal also encodes eid on row elements
     document.querySelectorAll("[data-resource-id]").forEach((row) => {
-      const id = Number((row as HTMLElement).dataset.resourceId);
+      const raw = (row as HTMLElement).dataset.resourceId ?? "";
+      const match = raw.match(/^eid_(\d+)$/);
+      const id = match ? Number(match[1]) : Number(raw);
       const label = row.querySelector(".fc-datagrid-cell-main")?.textContent?.trim();
       if (id && label) result.set(id, label);
     });

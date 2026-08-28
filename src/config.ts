@@ -19,7 +19,6 @@ export function loadConfig(): Required<Pick<UserConfig, "defaultCategory">> & Us
   if (!existsSync(CONFIG_PATH)) {
     const defaults = {
       defaultCategory: DEFAULT_CATEGORY,
-      calendarName: "Calendar",
       preferSameDay: true,
       minLeadMinutes: 30,
       searchHorizonDays: 7,
@@ -36,7 +35,6 @@ export function loadConfig(): Required<Pick<UserConfig, "defaultCategory">> & Us
     bookingPurpose: "Study session",
     ...parsed,
     defaultCategory: parsed.defaultCategory ?? DEFAULT_CATEGORY,
-    calendarName: parsed.calendarName ?? "Calendar",
   };
 }
 

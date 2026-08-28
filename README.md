@@ -1,6 +1,6 @@
 # UNC LibCal MCP
 
-MCP server for booking [UNC Davis Library](https://calendar.lib.unc.edu) study spaces from Claude, Cursor, Codex, or any MCP client — with optional Apple Calendar integration.
+MCP server for booking [UNC Davis Library](https://calendar.lib.unc.edu) study spaces from Claude, Cursor, Codex, or any MCP client.
 
 Built for UNC students, faculty, and staff with a valid **Onyen**. Not affiliated with or endorsed by UNC Libraries.
 
@@ -15,13 +15,11 @@ The server will:
 1. Check LibCal availability (public API — no login needed)
 2. Suggest ranked options (`libcal_suggest`) or book a slot you confirm (`libcal_book`)
 3. Complete the reservation in your browser session (Playwright + saved Onyen login)
-4. Optionally add the event to Apple Calendar (macOS only)
 
 ## Requirements
 
 - **Node.js 20+**
 - **UNC Onyen** (for booking; availability checks work without login)
-- **macOS** for Apple Calendar sync (optional)
 - **Chromium** (installed automatically via Playwright)
 
 ## Quick start
@@ -73,15 +71,12 @@ On first run, `~/.unc-libcal/config.json` is created with defaults:
 ```json
 {
   "defaultCategory": "davis-cubes",
-  "calendarName": "Calendar",
   "preferSameDay": true,
   "minLeadMinutes": 30,
   "searchHorizonDays": 7,
   "bookingPurpose": "Study session"
 }
 ```
-
-Ask the agent to run `libcal_list_calendars`, then set `calendarName` to your preferred Apple Calendar. Grant **Automation** permission when macOS prompts (Terminal or Cursor → Calendar).
 
 ### 4. Connect your MCP client
 
@@ -203,7 +198,7 @@ Then:
 Suggest Davis cubes for 2 hours tomorrow
 ```
 
-You should see `libcal_auth_status`, `libcal_suggest`, `libcal_check_availability`, `libcal_book`, and `libcal_list_calendars` available once the server is connected.
+You should see `libcal_auth_status`, `libcal_suggest`, `libcal_check_availability`, and `libcal_book` available once the server is connected.
 
 ## Troubleshooting
 
@@ -213,7 +208,6 @@ You should see `libcal_auth_status`, `libcal_suggest`, `libcal_check_availabilit
 | `libcal_auth_status` says not logged in | Run `npm run login` (see above) |
 | Login saved but booking redirects to SSO | Re-run `npm run login` — you pressed Enter before seeing **Logout** |
 | `libcal_book` fails after suggest | Slot was taken — run `libcal_suggest` again |
-| Calendar event not created | Grant Automation: System Settings → Privacy & Security → Automation → allow Terminal/Cursor → Calendar |
 | MCP tools don't appear in Claude Desktop | Fully quit (Cmd+Q) and reopen; confirm `mcpServers` path points to `dist/index.js` |
 
 Sessions expire periodically. Run `npm run login` again when `libcal_auth_status` reports expired.
@@ -224,9 +218,8 @@ Sessions expire periodically. Run `npm run login` again when `libcal_auth_status
 |---|---|---|
 | `libcal_suggest` | No | Ranked booking options; same-day priority unless you specify a date |
 | `libcal_check_availability` | No | Open slots on one date |
-| `libcal_book` | Yes | Book a confirmed slot + optional Apple Calendar event |
+| `libcal_book` | Yes | Book a confirmed slot |
 | `libcal_auth_status` | Yes | Check if saved session is still valid |
-| `libcal_list_calendars` | No | List Apple Calendar names (macOS) |
 
 ### Booking workflow
 
@@ -261,7 +254,6 @@ Any study rooms free Friday afternoon?
 
 - **Availability** — reverse-engineered LibCal grid API (`/spaces/availability/grid`)
 - **Booking** — Playwright drives the real LibCal UI: select slot → submit times → `/spaces/auth` checkout → confirm form
-- **Calendar** — AppleScript → Calendar.app (macOS Automation permission required)
 
 ## CLI scripts
 

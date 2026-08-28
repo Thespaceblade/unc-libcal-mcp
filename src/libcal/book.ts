@@ -9,7 +9,7 @@ import type { AvailabilitySlot, BookingResult } from "./types.js";
 import { SPACE_CATEGORIES } from "./constants.js";
 import { cookiesAsHeader } from "../auth/session.js";
 import { loadSpaceNames, resolveSpaceName } from "./spaces.js";
-import { bookSpaceInBrowser } from "./browser.js";
+import { bookSpaceInBrowser, clearBookingCartCookies } from "./browser.js";
 import { addMinutesToDateTime } from "./time.js";
 
 function pickSlot(
@@ -80,15 +80,8 @@ export async function assertSlotAvailable(
     );
   }
 
-  let spaceName: string | undefined;
-  if (context) {
-    const page = await context.newPage();
-    const spaceNames = await loadSpaceNames(page, category.path);
-    spaceName = resolveSpaceName(spaceNames, slot.itemId);
-    await page.close();
-  }
-
-  return { itemId: slot.itemId, spaceName };
+  // Do not open the LibCal UI here — visiting the page sets lc_ebcart and breaks booking.
+  return { itemId: slot.itemId };
 }
 
 export async function bookSpace(
@@ -113,7 +106,7 @@ export async function bookSpace(
   }
 
   const duration = options.durationMinutes ?? 60;
-  const { itemId, spaceName } = await assertSlotAvailable(context, {
+  const { itemId } = await assertSlotAvailable(context, {
     categoryId: options.categoryId,
     date: options.date,
     startTime: options.startTime,
@@ -123,6 +116,7 @@ export async function bookSpace(
 
   const page = await context.newPage();
   try {
+    await clearBookingCartCookies(context);
     const result = await bookSpaceInBrowser(page, {
       category,
       date: options.date,
@@ -130,7 +124,6 @@ export async function bookSpace(
       durationMinutes: duration,
       purpose: options.purpose ?? "Study session",
       groupName: options.groupName,
-      spaceName,
       itemId,
     });
 

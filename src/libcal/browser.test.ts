@@ -4,9 +4,25 @@ import {
   calendarStepDirection,
   findSlotAtTime,
   isBookingConfirmed,
+  parseResourceItemId,
   pickEndTimeOption,
   SLOT_MATCH_TOLERANCE_PX,
 } from "../libcal/browser.js";
+
+describe("parseResourceItemId", () => {
+  it("parses LibCal eid_ prefix", () => {
+    assert.equal(parseResourceItemId("eid_29085"), 29085);
+  });
+
+  it("parses plain numeric ids", () => {
+    assert.equal(parseResourceItemId("29085"), 29085);
+  });
+
+  it("returns null for garbage", () => {
+    assert.equal(parseResourceItemId(undefined), null);
+    assert.equal(parseResourceItemId("foo"), null);
+  });
+});
 
 describe("calendarStepDirection", () => {
   it("stops when dates match", () => {

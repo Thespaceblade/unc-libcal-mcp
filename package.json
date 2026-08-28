@@ -1,7 +1,7 @@
 {
   "name": "unc-libcal-mcp",
   "version": "0.3.0",
-  "description": "MCP server to book UNC Davis Library spaces and add them to Apple Calendar",
+  "description": "MCP server to book UNC Davis Library spaces via LibCal",
   "license": "MIT",
   "repository": {
     "type": "git",

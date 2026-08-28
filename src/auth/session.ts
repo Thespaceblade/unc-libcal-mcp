@@ -24,7 +24,7 @@ export async function triggerLibCalLogin(page: import("playwright").Page): Promi
   await page.waitForTimeout(800);
 
   const clicked = await page.evaluate(() => {
-    const slot = document.querySelector("a.s-lc-eq-avail");
+    const slot = document.querySelector(".s-lc-eq-avail");
     if (!slot) return false;
     (slot as HTMLElement).click();
     return true;
@@ -137,7 +137,10 @@ export async function withAuthenticatedContext<T>(
   }
 
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ storageState: SESSION_PATH });
+  const context = await browser.newContext({
+    storageState: SESSION_PATH,
+    viewport: { width: 1400, height: 900 },
+  });
 
   try {
     return await fn(context);

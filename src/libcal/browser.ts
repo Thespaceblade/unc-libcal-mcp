@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { BASE_URL, type SpaceCategory } from "./constants.js";
 import type { BookingResult } from "./types.js";
 import {
@@ -12,6 +12,15 @@ import {
 export const SLOT_MATCH_TOLERANCE_PX = 24;
 export const CALENDAR_MAX_ADVANCE_CLICKS = 14;
 export const BOOKING_FORM_SELECTOR = "#s-lc-eq-form-times select";
+
+/** LibCal rows use data-resource-id like "eid_29085"; API itemId is 29085. */
+export function parseResourceItemId(resourceId: string | undefined): number | null {
+  if (!resourceId) return null;
+  const prefixed = resourceId.match(/^eid_(\d+)$/);
+  if (prefixed) return Number(prefixed[1]);
+  const plain = Number(resourceId);
+  return Number.isNaN(plain) ? null : plain;
+}
 
 export interface SlotHeader {
   label: string;
@@ -28,7 +37,9 @@ export function isBookingConfirmed(content: string): boolean {
   return (
     /booking\s+confirmed/i.test(content) ||
     /your booking has been submitted/i.test(content) ||
-    /booking confirmation/i.test(content)
+    /booking confirmation/i.test(content) ||
+    /successfully booked/i.test(content) ||
+    /booking complete/i.test(content)
   );
 }
 
@@ -143,18 +154,26 @@ export async function selectSlotByTimeLabel(
         targetHeader.getBoundingClientRect().left + targetHeader.getBoundingClientRect().width / 2;
 
       for (const row of [...document.querySelectorAll("[data-resource-id]")]) {
-        const resourceId = Number((row as HTMLElement).dataset.resourceId);
-        if (itemId && resourceId !== itemId) continue;
+        const resourceId = (row as HTMLElement).dataset.resourceId ?? "";
+        const rowItemId = /^eid_(\d+)$/.exec(resourceId)?.[1];
+        const parsedId = rowItemId ? Number(rowItemId) : Number(resourceId);
+        if (itemId && parsedId !== itemId) continue;
 
-        for (const slot of [...row.querySelectorAll("a.s-lc-eq-avail")]) {
+        for (const slot of [...row.querySelectorAll(".s-lc-eq-avail")]) {
           const rect = slot.getBoundingClientRect();
           if (rect.width === 0) continue;
           const cx = rect.left + rect.width / 2;
           if (Math.abs(cx - targetX) <= tolerance) {
             (slot as HTMLElement).click();
+            const namedRow = [...document.querySelectorAll("[data-resource-id]")].find(
+              (candidate) =>
+                candidate.getAttribute("data-resource-id") === resourceId &&
+                candidate.querySelector(".fc-datagrid-cell-main"),
+            );
             return {
               ok: true as const,
-              room: row.querySelector(".fc-datagrid-cell-main")?.textContent?.trim() ?? "space",
+              room:
+                namedRow?.querySelector(".fc-datagrid-cell-main")?.textContent?.trim() ?? "space",
             };
           }
         }
@@ -224,7 +243,7 @@ export async function completeCheckout(
   const continueBtn = page.locator('button:has-text("Continue to Complete Your Booking")').first();
   if (await continueBtn.isVisible().catch(() => false)) {
     await continueBtn.click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(1000);
   }
 
   const groupField = page.getByLabel(/course or group name/i);
@@ -246,7 +265,22 @@ export async function completeCheckout(
     .first();
 
   await submit.click();
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForTimeout(2000);
+
+  const limitError = page.locator("body").filter({ hasText: /180 minute per day limit/i });
+  if (await limitError.isVisible().catch(() => false)) {
+    throw new Error(
+      "LibCal daily limit reached (3 hours per day at Davis). Cancel an existing booking via your confirmation email before booking more.",
+    );
+  }
+}
+
+/** LibCal cart cookies from browsing the grid can block slot selection — clear before booking. */
+export async function clearBookingCartCookies(context: BrowserContext): Promise<void> {
+  for (const name of ["lc_ebcart", "lc_ea_po"]) {
+    await context.clearCookies({ name });
+  }
 }
 
 export async function bookSpaceInBrowser(
@@ -266,20 +300,24 @@ export async function bookSpaceInBrowser(
   const endTime = addMinutesToDateTime(`${params.date} ${params.startTime}:00`, params.durationMinutes);
   const endLabel = timeTo12HourLabel(endTime.split(" ")[1]?.slice(0, 5) ?? "");
 
-  await page.goto(`${BASE_URL}${params.category.path}`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_URL}${params.category.path}`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1500);
   await advanceToDate(page, params.date);
+  await page.waitForSelector(".s-lc-eq-avail", { timeout: 15_000 });
 
   const room = await selectSlotByTimeLabel(page, startLabel, params.itemId);
   await page.waitForSelector(BOOKING_FORM_SELECTOR, { timeout: 10_000 });
   await setBookingEndTime(page, endLabel);
 
   await page.locator('button:has-text("Submit Times")').click();
-  await page.waitForLoadState("networkidle");
+  await page.waitForURL(/\/spaces\/auth|sso\.unc\.edu/, { timeout: 15_000 }).catch(() => undefined);
+  await page.waitForTimeout(1000);
 
   // LibCal redirects to /spaces/auth after submit when authenticated.
   if (!page.url().includes("/spaces/auth") && !page.url().includes("sso.unc.edu")) {
     const alert = await page.locator(".alert-danger, .alert-warning, [role='alert']").first().textContent().catch(() => null);
     if (alert) throw new Error(alert.trim());
+    throw new Error(`Booking did not reach checkout (stuck at ${page.url()})`);
   }
 
   await completeCheckout(page, {
