@@ -4,6 +4,8 @@ import {
   calendarStepDirection,
   findSlotAtTime,
   isBookingConfirmed,
+  optionMatchesEndTime,
+  parseBookingTimesFromHtml,
   parseResourceItemId,
   pickEndTimeOption,
   SLOT_MATCH_TOLERANCE_PX,
@@ -71,6 +73,26 @@ describe("pickEndTimeOption", () => {
 
   it("handles empty options", () => {
     assert.equal(pickEndTimeOption([], "1:00pm"), null);
+  });
+
+  it("does not fuzzy-match shorter times inside longer labels", () => {
+    const options = ["11:30am Friday, August 28, 2026", "1:00pm Friday, August 28, 2026"];
+    assert.equal(pickEndTimeOption(options, "1:00pm"), "1:00pm Friday, August 28, 2026");
+    assert.equal(pickEndTimeOption(options, "11:30am"), "11:30am Friday, August 28, 2026");
+  });
+});
+
+describe("optionMatchesEndTime", () => {
+  it("matches option prefixes only", () => {
+    assert.equal(optionMatchesEndTime("1:00pm Friday, August 28, 2026", "1:00pm"), true);
+    assert.equal(optionMatchesEndTime("11:30am Friday, August 28, 2026", "1:00pm"), false);
+  });
+});
+
+describe("parseBookingTimesFromHtml", () => {
+  it("parses from/to confirmation copy", () => {
+    const html = "<p>From: 11:00am to 1:00pm on Tuesday, September 1, 2026</p>";
+    assert.deepEqual(parseBookingTimesFromHtml(html), { start: "11:00", end: "13:00" });
   });
 });
 

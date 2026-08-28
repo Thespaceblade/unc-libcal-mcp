@@ -5,7 +5,9 @@ import {
   addMinutesToDateTime,
   calendarHeadingForDate,
   dayDiff,
+  parse12HourLabelPrefix,
   parseCalendarHeading,
+  timeDiffMinutes,
   timeTo12HourLabel,
 } from "./time.js";
 
@@ -43,6 +45,23 @@ export function isBookingConfirmed(content: string): boolean {
   );
 }
 
+/** Drop held slots from a login/checkout page so npm run login cannot accidentally book. */
+export async function abandonHeldBookings(page: Page): Promise<number> {
+  let removed = 0;
+  const removeButtons = page.getByRole("button", { name: /^Remove$/i });
+  while ((await removeButtons.count()) > 0) {
+    await removeButtons.first().click();
+    await page.waitForTimeout(500);
+    removed++;
+  }
+
+  for (const name of ["lc_ebcart", "lc_ea_po"]) {
+    await page.context().clearCookies({ name });
+  }
+
+  return removed;
+}
+
 /** Map timeline header labels to horizontal centers (for slot matching). */
 export function buildSlotHeaders(
   labels: string[],
@@ -74,12 +93,35 @@ export function findSlotAtTime(
 /** Pick dropdown option text that ends at the requested wall-clock time. */
 export function pickEndTimeOption(options: string[], endLabel: string): string | null {
   const endLower = endLabel.toLowerCase();
-  const exact = options.find((o) => {
-    const lower = o.toLowerCase();
-    return lower.startsWith(endLower) || lower.includes(` ${endLower}`);
-  });
-  if (exact) return exact;
-  return options.find((o) => o.toLowerCase().includes(endLower)) ?? null;
+  return options.find((option) => option.trim().toLowerCase().startsWith(endLower)) ?? null;
+}
+
+/** True when a LibCal dropdown option begins with the requested end time. */
+export function optionMatchesEndTime(optionText: string, endLabel: string): boolean {
+  return optionText.trim().toLowerCase().startsWith(endLabel.toLowerCase());
+}
+
+/** Parse booked start/end times from LibCal confirmation HTML. */
+export function parseBookingTimesFromHtml(html: string): { start?: string; end?: string } {
+  const fromTo = html.match(
+    /from[:\s]*(\d{1,2}:\d{2}\s*(?:am|pm))[\s\S]{0,300}?to[:\s]*(\d{1,2}:\d{2}\s*(?:am|pm))/i,
+  );
+  if (fromTo) {
+    return {
+      start: parse12HourLabelPrefix(fromTo[1]) ?? undefined,
+      end: parse12HourLabelPrefix(fromTo[2]) ?? undefined,
+    };
+  }
+
+  const labels = [...html.matchAll(/(\d{1,2}:\d{2}\s*(?:am|pm))/gi)].map((match) => match[1]);
+  if (labels.length >= 2) {
+    return {
+      start: parse12HourLabelPrefix(labels[0]) ?? undefined,
+      end: parse12HourLabelPrefix(labels[1]) ?? undefined,
+    };
+  }
+
+  return {};
 }
 
 export const CALENDAR_NEXT_BUTTON = "button.fc-next-button";
@@ -192,6 +234,16 @@ export async function selectSlotByTimeLabel(
   return clicked.room;
 }
 
+export async function readSelectedEndOption(page: Page): Promise<string | null> {
+  const control = page.locator(BOOKING_FORM_SELECTOR).first();
+  if ((await control.count()) === 0) return null;
+
+  return control.evaluate((element) => {
+    const select = element as HTMLSelectElement;
+    return select.options[select.selectedIndex]?.textContent?.trim() ?? null;
+  });
+}
+
 export async function setBookingEndTime(page: Page, endLabel: string): Promise<void> {
   const control = page.locator(
     `${BOOKING_FORM_SELECTOR}, [role='region'][aria-label*='booking form' i] select, [role='region'][aria-label*='booking form' i] [role='combobox']`,
@@ -203,18 +255,34 @@ export async function setBookingEndTime(page: Page, endLabel: string): Promise<v
 
   const tag = await control.evaluate((el) => el.tagName.toLowerCase());
   if (tag === "select") {
-    const options = await control.locator("option").allTextContents();
-    const match = pickEndTimeOption(options, endLabel);
-    if (!match) {
-      throw new Error(`End time ${endLabel} not in options: ${options.join(" | ")}`);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const options = await control.locator("option").allTextContents();
+      const match = pickEndTimeOption(options, endLabel);
+      if (match) {
+        await control.selectOption({ label: match });
+        await control.evaluate((element) => {
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await page.waitForTimeout(200);
+
+        const selected = await readSelectedEndOption(page);
+        if (selected && optionMatchesEndTime(selected, endLabel)) {
+          return;
+        }
+      }
+      await page.waitForTimeout(150);
     }
-    await control.selectOption({ label: match });
-    return;
+
+    const options = await control.locator("option").allTextContents();
+    const selected = await readSelectedEndOption(page);
+    throw new Error(
+      `Failed to set booking end time to ${endLabel}. Selected: ${selected ?? "none"}. Options: ${options.join(" | ")}`,
+    );
   }
 
   await control.click({ force: true });
   const escaped = endLabel.replace(":", "\\:");
-  const option = page.getByRole("option", { name: new RegExp(escaped, "i") }).first();
+  const option = page.getByRole("option", { name: new RegExp(`^${escaped}`, "i") }).first();
   if (await option.isVisible().catch(() => false)) {
     await option.click();
     return;
@@ -309,6 +377,15 @@ export async function bookSpaceInBrowser(
   await page.waitForSelector(BOOKING_FORM_SELECTOR, { timeout: 10_000 });
   await setBookingEndTime(page, endLabel);
 
+  const selectedEnd = await readSelectedEndOption(page);
+  const selectedEndHhmm = selectedEnd ? parse12HourLabelPrefix(selectedEnd) : null;
+  const expectedEndHhmm = endTime.split(" ")[1]?.slice(0, 5) ?? "";
+  if (!selectedEndHhmm || selectedEndHhmm !== expectedEndHhmm) {
+    throw new Error(
+      `End time verification failed before submit. Wanted ${endLabel} (${expectedEndHhmm}), form has ${selectedEnd ?? "nothing"}.`,
+    );
+  }
+
   await page.locator('button:has-text("Submit Times")').click();
   await page.waitForURL(/\/spaces\/auth|sso\.unc\.edu/, { timeout: 15_000 }).catch(() => undefined);
   await page.waitForTimeout(1000);
@@ -327,15 +404,38 @@ export async function bookSpaceInBrowser(
 
   const body = await page.content();
   const confirmed = isBookingConfirmed(body);
+  const parsedTimes = parseBookingTimesFromHtml(body);
+  const bookedStartHhmm = parsedTimes.start ?? params.startTime;
+  const bookedEndHhmm = parsedTimes.end ?? selectedEndHhmm ?? expectedEndHhmm;
+  const bookedStart = `${params.date} ${bookedStartHhmm}:00`;
+  const bookedEnd = `${params.date} ${bookedEndHhmm}:00`;
+  const bookedMinutes = timeDiffMinutes(bookedStartHhmm, bookedEndHhmm);
+
+  if (bookedMinutes < params.durationMinutes) {
+    return {
+      success: false,
+      spaceName: params.spaceName ?? room,
+      itemId: params.itemId ?? 0,
+      start: bookedStart,
+      end: bookedEnd,
+      location: `Davis Library — ${params.category.name}`,
+      confirmationUrl: page.url(),
+      message:
+        `Booked only ${bookedMinutes} minutes (${bookedStartHhmm}–${bookedEndHhmm}), ` +
+        `not the requested ${params.durationMinutes} minutes. Cancel via your LibCal confirmation email and retry.`,
+    };
+  }
 
   return {
     success: confirmed,
     spaceName: params.spaceName ?? room,
-    itemId: 0,
-    start: `${params.date} ${params.startTime}:00`,
-    end: endTime,
+    itemId: params.itemId ?? 0,
+    start: bookedStart,
+    end: bookedEnd,
     location: `Davis Library — ${params.category.name}`,
     confirmationUrl: page.url(),
-    message: confirmed ? "Booking confirmed" : "Booking may be pending — check LibCal or your email",
+    message: confirmed
+      ? `Booking confirmed (${bookedStartHhmm}–${bookedEndHhmm})`
+      : "Booking may be pending — check LibCal or your email",
   };
 }

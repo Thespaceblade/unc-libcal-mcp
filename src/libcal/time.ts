@@ -70,3 +70,23 @@ export function dayDiff(a: string, b: string): number {
     (new Date(`${b}T12:00:00`).getTime() - new Date(`${a}T12:00:00`).getTime()) / 86400000,
   );
 }
+
+/** "1:00pm Tuesday, September 1, 2026" → "13:00". */
+export function parse12HourLabelPrefix(label: string): string | null {
+  const match = label.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)\b/i);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const period = match[3].toLowerCase();
+  if (period === "pm" && hour !== 12) hour += 12;
+  if (period === "am" && hour === 12) hour = 0;
+  return `${PAD(hour)}:${PAD(minute)}`;
+}
+
+/** Minutes from start HH:MM to end HH:MM on the same calendar day. */
+export function timeDiffMinutes(startHhmm: string, endHhmm: string): number {
+  const [sh, sm] = startHhmm.split(":").map(Number);
+  const [eh, em] = endHhmm.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
+}

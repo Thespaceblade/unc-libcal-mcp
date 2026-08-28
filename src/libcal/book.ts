@@ -1,39 +1,11 @@
 import type { BrowserContext } from "playwright";
-import {
-  LibCalClient,
-  filterSlots,
-  slotDate,
-  slotStartTime,
-} from "./client.js";
-import type { AvailabilitySlot, BookingResult } from "./types.js";
+import { LibCalClient, filterSlots, slotDate, slotStartTime } from "./client.js";
+import type { BookingResult } from "./types.js";
 import { SPACE_CATEGORIES } from "./constants.js";
 import { cookiesAsHeader } from "../auth/session.js";
-import { loadSpaceNames, resolveSpaceName } from "./spaces.js";
+import { loadSpaceNames } from "./spaces.js";
 import { bookSpaceInBrowser, clearBookingCartCookies } from "./browser.js";
-import { addMinutesToDateTime } from "./time.js";
-
-function pickSlot(
-  slots: AvailabilitySlot[],
-  options: {
-    date: string;
-    startTime?: string;
-    itemId?: number;
-    durationMinutes: number;
-  },
-): AvailabilitySlot | null {
-  const candidates = filterSlots(slots, {
-    afterTime: options.startTime,
-    itemId: options.itemId,
-    durationMinutes: options.durationMinutes,
-  }).filter((s) => slotDate(s) === options.date);
-
-  if (options.startTime) {
-    const exact = candidates.find((s) => slotStartTime(s) === options.startTime);
-    if (exact) return exact;
-  }
-
-  return candidates[0] ?? null;
-}
+import { findDurationBlocks } from "./planner.js";
 
 /** Verify a multi-hour block exists before attempting browser booking. */
 export async function assertSlotAvailable(
@@ -60,28 +32,33 @@ export async function assertSlotAvailable(
     date: options.date,
   });
 
-  const slot = pickSlot(slots, {
-    date: options.date,
-    startTime: options.startTime,
-    itemId: options.itemId,
-    durationMinutes: options.durationMinutes,
-  });
+  const blocks = findDurationBlocks(
+    slots,
+    options.date,
+    options.durationMinutes,
+    options.startTime,
+  );
 
-  if (!slot) {
-    const available = filterSlots(slots, { durationMinutes: options.durationMinutes })
-      .filter((s) => slotDate(s) === options.date)
+  const block = blocks.find(
+    (candidate) =>
+      candidate.startTime === options.startTime &&
+      (!options.itemId || candidate.itemId === options.itemId),
+  );
+
+  if (!block) {
+    const available = blocks
       .slice(0, 8)
-      .map((s) => `${slotStartTime(s)} (space ${s.itemId})`);
+      .map((candidate) => `${candidate.startTime}–${candidate.endTime} (space ${candidate.itemId})`);
 
     throw new Error(
       available.length
-        ? `No matching slot on ${options.date} at ${options.startTime}. Available: ${available.join(", ")}`
-        : `No available slots on ${options.date} for ${category.name}`,
+        ? `No ${options.durationMinutes}-minute block on ${options.date} at ${options.startTime}. Available: ${available.join(", ")}`
+        : `No ${options.durationMinutes}-minute blocks on ${options.date} for ${category.name}`,
     );
   }
 
   // Do not open the LibCal UI here — visiting the page sets lc_ebcart and breaks booking.
-  return { itemId: slot.itemId };
+  return { itemId: block.itemId };
 }
 
 export async function bookSpace(
@@ -117,7 +94,7 @@ export async function bookSpace(
   const page = await context.newPage();
   try {
     await clearBookingCartCookies(context);
-    const result = await bookSpaceInBrowser(page, {
+    return await bookSpaceInBrowser(page, {
       category,
       date: options.date,
       startTime: options.startTime,
@@ -126,12 +103,6 @@ export async function bookSpace(
       groupName: options.groupName,
       itemId,
     });
-
-    return {
-      ...result,
-      itemId,
-      end: addMinutesToDateTime(`${options.date} ${options.startTime}:00`, duration),
-    };
   } finally {
     await page.close();
   }
@@ -165,14 +136,23 @@ export async function listAvailability(
     await page.close();
   }
 
+  const duration = options.durationMinutes ?? 60;
+  if (duration > 30) {
+    return findDurationBlocks(slots, options.date, duration, options.afterTime).map((block) => ({
+      time: block.startTime,
+      itemId: block.itemId,
+      spaceName: spaceNames.get(block.itemId),
+    }));
+  }
+
   return filterSlots(slots, {
     afterTime: options.afterTime,
-    durationMinutes: options.durationMinutes ?? 60,
+    durationMinutes: duration,
   })
-    .filter((s) => slotDate(s) === options.date)
-    .map((s) => ({
-      time: slotStartTime(s),
-      itemId: s.itemId,
-      spaceName: spaceNames.get(s.itemId),
+    .filter((slot) => slotDate(slot) === options.date)
+    .map((slot) => ({
+      time: slotStartTime(slot),
+      itemId: slot.itemId,
+      spaceName: spaceNames.get(slot.itemId),
     }));
 }

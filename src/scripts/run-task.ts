@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Thin CLI wrapper around the hardened browser booking module. */
-import { chromium } from "playwright";
-import { loadConfig, SESSION_PATH } from "../config.js";
+import { loadConfig } from "../config.js";
+import { withAuthenticatedContext } from "../auth/session.js";
 import { bookSpaceInBrowser } from "../libcal/browser.js";
 import { SPACE_CATEGORIES } from "../libcal/constants.js";
 import { timeTo12HourLabel } from "../libcal/time.js";
@@ -38,24 +38,27 @@ async function main(): Promise<void> {
   if (!category) throw new Error(`Unknown category: ${categoryId}`);
 
   const config = loadConfig();
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ storageState: SESSION_PATH });
-  const page = await context.newPage();
 
   console.log(
     `Booking ${category.name} ${date} ${timeTo12HourLabel(start)} (${duration} min)...`,
   );
 
-  const result = await bookSpaceInBrowser(page, {
-    category,
-    date,
-    startTime: start,
-    durationMinutes: duration,
-    purpose: config.bookingPurpose ?? "Study session",
+  const result = await withAuthenticatedContext(async (context) => {
+    const page = await context.newPage();
+    try {
+      return await bookSpaceInBrowser(page, {
+        category,
+        date,
+        startTime: start,
+        durationMinutes: duration,
+        purpose: config.bookingPurpose ?? "Study session",
+      });
+    } finally {
+      await page.close();
+    }
   });
 
   console.log(JSON.stringify(result, null, 2));
-  await browser.close();
 
   if (!result.success) process.exit(1);
 }

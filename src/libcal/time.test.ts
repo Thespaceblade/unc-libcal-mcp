@@ -6,7 +6,9 @@ import {
   calendarHeadingForDate,
   dayDiff,
   localDateString,
+  parse12HourLabelPrefix,
   parseCalendarHeading,
+  timeDiffMinutes,
   timeTo12HourLabel,
   toFormStart,
 } from "../libcal/time.js";
@@ -85,5 +87,17 @@ describe("localDateString", () => {
   it("uses local calendar components", () => {
     const d = new Date(2026, 7, 28, 23, 30); // Aug 28 local
     assert.equal(localDateString(d), "2026-08-28");
+  });
+});
+
+describe("parse12HourLabelPrefix / timeDiffMinutes", () => {
+  it("parses LibCal dropdown labels", () => {
+    assert.equal(parse12HourLabelPrefix("1:00pm Tuesday, September 1, 2026"), "13:00");
+    assert.equal(parse12HourLabelPrefix("11:30am Friday, August 28, 2026"), "11:30");
+  });
+
+  it("computes booking duration in minutes", () => {
+    assert.equal(timeDiffMinutes("11:00", "13:00"), 120);
+    assert.equal(timeDiffMinutes("11:00", "11:30"), 30);
   });
 });

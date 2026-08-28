@@ -7,6 +7,7 @@ import { DEFAULT_CATEGORY } from "./libcal/constants.js";
 export const DATA_DIR = join(homedir(), ".unc-libcal");
 export const CONFIG_PATH = join(DATA_DIR, "config.json");
 export const SESSION_PATH = join(DATA_DIR, "storage-state.json");
+export const BROWSER_PROFILE_DIR = join(DATA_DIR, "browser-profile");
 
 export function ensureDataDir(): void {
   if (!existsSync(DATA_DIR)) {
@@ -41,5 +42,5 @@ export function loadConfig(): Required<Pick<UserConfig, "defaultCategory">> & Us
 }
 
 export function hasSession(): boolean {
-  return existsSync(SESSION_PATH);
+  return existsSync(BROWSER_PROFILE_DIR) || existsSync(SESSION_PATH);
 }
