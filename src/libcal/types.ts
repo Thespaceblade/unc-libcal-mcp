@@ -30,6 +30,7 @@ export interface BookingResult {
 }
 
 export interface UserConfig {
+  calendarName?: string;
   defaultCategory?: string;
   email?: string;
   bookingPurpose?: string;

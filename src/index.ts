@@ -7,6 +7,8 @@ import { checkSessionValid, LOGIN_SETUP_HINT, withAuthenticatedContext } from ".
 import { bookSpace, listAvailability } from "./libcal/book.js";
 import { suggestBookingOptions, formatDurationHint } from "./libcal/planner.js";
 import { SPACE_CATEGORIES, DEFAULT_CATEGORY } from "./libcal/constants.js";
+import { addToAppleCalendar, listCalendars } from "./calendar/apple.js";
+
 const server = new McpServer({
   name: "unc-libcal",
   version: "0.3.0",
@@ -187,6 +189,10 @@ server.tool(
       .int()
       .optional()
       .describe("LibCal item/space id (from libcal_suggest option if available)"),
+    add_to_calendar: z
+      .boolean()
+      .optional()
+      .describe("Add to Apple Calendar after booking (default true)"),
   },
   async ({
     date,
@@ -195,6 +201,7 @@ server.tool(
     user_confirmed,
     category,
     space_id,
+    add_to_calendar,
   }) => {
     if (!user_confirmed) {
       return {
@@ -239,6 +246,19 @@ server.tool(
       { persistSession: true },
     );
 
+    let calendarMessage = "";
+    if (add_to_calendar !== false) {
+      const cal = await addToAppleCalendar({
+        calendarName: config.calendarName ?? "Calendar",
+        title: result.spaceName,
+        start: result.start,
+        end: result.end,
+        location: result.location,
+        notes: `UNC LibCal booking. ${result.confirmationUrl ?? ""}`.trim(),
+      });
+      calendarMessage = cal.message;
+    }
+
     const summary = [
       result.success ? "Booked!" : "Booking attempted (verify in LibCal)",
       "",
@@ -246,6 +266,7 @@ server.tool(
       `When: ${result.start} → ${result.end}`,
       `Where: ${result.location}`,
       result.confirmationUrl ? `URL: ${result.confirmationUrl}` : "",
+      calendarMessage ? `\nCalendar: ${calendarMessage}` : "",
       "",
       "To cancel later: use the link in your confirmation email from alerts@mail.libcal.com. This server cannot cancel bookings.",
     ]
@@ -255,6 +276,26 @@ server.tool(
     return {
       content: [{ type: "text", text: summary }],
       isError: !result.success,
+    };
+  },
+);
+
+server.tool(
+  "libcal_list_calendars",
+  "List Apple Calendar calendar names (use one in ~/.unc-libcal/config.json as calendarName).",
+  {},
+  async () => {
+    const calendars = await listCalendars();
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            calendars.length > 0
+              ? `Apple Calendars:\n${calendars.map((c) => `- ${c}`).join("\n")}`
+              : "No calendars found or Calendar access denied.",
+        },
+      ],
     };
   },
 );
