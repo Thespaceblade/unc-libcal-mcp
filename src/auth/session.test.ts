@@ -7,6 +7,7 @@ describe("sessionProbeResult", () => {
     const result = sessionProbeResult("https://sso.unc.edu/shibboleth", false);
     assert.equal(result.valid, false);
     assert.match(result.message, /npm run login/);
+    assert.match(result.message, /public Davis cubes/i);
   });
 
   it("accepts page with Logout link", () => {

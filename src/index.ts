@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
-import { checkSessionValid, withAuthenticatedContext } from "./auth/session.js";
+import { checkSessionValid, LOGIN_SETUP_HINT, withAuthenticatedContext } from "./auth/session.js";
 import { bookSpace, listAvailability } from "./libcal/book.js";
 import { suggestBookingOptions, formatDurationHint } from "./libcal/planner.js";
 import { SPACE_CATEGORIES, DEFAULT_CATEGORY } from "./libcal/constants.js";
@@ -31,14 +31,24 @@ CANCELLATION (required):
 - If asked to cancel, direct them to search their inbox for that sender — do not attempt automation or scraping.
 `.trim();
 
+const AGENT_LOGIN_RULES = `
+LOGIN SETUP (required before libcal_book):
+- Booking needs a saved Onyen session from \`npm run login\` in the project directory.
+- LibCal's calendar page is public — Onyen only appears after the login script triggers it (or after slot → Submit Times).
+- If libcal_auth_status is invalid, walk the user through npm run login; do not attempt libcal_book.
+`.trim();
+
 server.tool(
   "libcal_auth_status",
-  "Check whether your saved UNC LibCal login session is still valid. Run `npm run login` in the unc-libcal-mcp project if expired.",
+  `Check whether the saved UNC LibCal Onyen session is valid. ${AGENT_LOGIN_RULES}`,
   {},
   async () => {
     const status = await checkSessionValid();
+    const text = status.valid
+      ? JSON.stringify(status, null, 2)
+      : JSON.stringify({ ...status, setup: LOGIN_SETUP_HINT }, null, 2);
     return {
-      content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+      content: [{ type: "text", text }],
     };
   },
 );
@@ -157,7 +167,7 @@ server.tool(
 
 server.tool(
   "libcal_book",
-  `Book a specific UNC LibCal slot. ${AGENT_BOOKING_RULES} ${AGENT_CANCELLATION_RULES} Requires user_confirmed=true. Categories: ${categoryIds}`,
+  `Book a specific UNC LibCal slot. ${AGENT_BOOKING_RULES} ${AGENT_LOGIN_RULES} ${AGENT_CANCELLATION_RULES} Requires user_confirmed=true. Categories: ${categoryIds}`,
   {
     date: z.string().describe("Booking date YYYY-MM-DD (from user choice or libcal_suggest option)"),
     start_time: z.string().describe("Start time HH:MM (from user choice or libcal_suggest option)"),
@@ -216,7 +226,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `${auth.message}\n\nRun this once in the project directory:\n  npm run login`,
+            text: `${auth.message}\n\n${LOGIN_SETUP_HINT}`,
           },
         ],
         isError: true,

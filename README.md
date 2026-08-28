@@ -209,8 +209,9 @@ You should see `libcal_auth_status`, `libcal_suggest`, `libcal_check_availabilit
 
 | Problem | Fix |
 |---|---|
-| `libcal_auth_status` says not logged in | Run `npm run login` — wait for **Logout** before pressing Enter |
-| Auth was "valid" but booking redirects to SSO | Re-run `npm run login` (old check was too lenient; update if you see this) |
+| `npm run login` opens cubes page, no Onyen prompt | **Normal.** Script auto-clicks a slot → Submit Times → UNC login. Sign in, wait for **Logout**, press Enter |
+| `libcal_auth_status` says not logged in | Run `npm run login` (see above) |
+| Login saved but booking redirects to SSO | Re-run `npm run login` — you pressed Enter before seeing **Logout** |
 | `libcal_book` fails after suggest | Slot was taken — run `libcal_suggest` again |
 | Calendar event not created | Grant Automation: System Settings → Privacy & Security → Automation → allow Terminal/Cursor → Calendar |
 | MCP tools don't appear in Claude Desktop | Fully quit (Cmd+Q) and reopen; confirm `mcpServers` path points to `dist/index.js` |

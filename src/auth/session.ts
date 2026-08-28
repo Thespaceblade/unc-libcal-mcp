@@ -7,6 +7,11 @@ import { BASE_URL } from "../libcal/constants.js";
 const LOGIN_URL = `${BASE_URL}/reserve/davis-cubes`;
 const BOOKING_FORM_SELECTOR = "#s-lc-eq-form-times select";
 
+/** Shown to users and agents when login is required. */
+export const LOGIN_SETUP_HINT =
+  "Run `npm run login` in the unc-libcal-mcp project. The browser opens to the public Davis cubes page (normal). " +
+  "The script auto-triggers UNC Onyen login. Sign in (+ Duo), wait for Logout on LibCal, then press Enter in the terminal.";
+
 /** Click a slot and submit times to reach UNC SSO (LibCal does not prompt on page load). */
 export async function triggerLibCalLogin(page: import("playwright").Page): Promise<boolean> {
   await page.goto(LOGIN_URL, { waitUntil: "networkidle" });
@@ -43,15 +48,14 @@ export function sessionProbeResult(
   hasLogoutLink: boolean,
 ): { valid: boolean; message: string } {
   if (url.includes("sso.unc.edu")) {
-    return { valid: false, message: "Session expired. Run: npm run login" };
+    return { valid: false, message: `Session expired. ${LOGIN_SETUP_HINT}` };
   }
   if (hasLogoutLink) {
     return { valid: true, message: "Session is active" };
   }
   return {
     valid: false,
-    message:
-      "Not logged in. Run: npm run login — complete Onyen + Duo, wait for Logout in the browser, then press Enter",
+    message: `Not logged in. ${LOGIN_SETUP_HINT}`,
   };
 }
 
@@ -80,7 +84,9 @@ export async function runLoginFlow(): Promise<void> {
 
   const triggered = await triggerLibCalLogin(page).catch(() => false);
 
-  if (page.url().includes("sso.unc.edu")) {
+  if ((await page.getByRole("link", { name: /logout/i }).count()) > 0) {
+    console.log("Already logged in to LibCal. Press Enter to save this session.\n");
+  } else if (page.url().includes("sso.unc.edu")) {
     console.log("UNC SSO is open — log in with your Onyen (+ Duo if asked).");
   } else if (!triggered) {
     console.log("Could not auto-start login. Manually: click any open slot → Submit Times.");
@@ -104,7 +110,7 @@ export async function runLoginFlow(): Promise<void> {
   await browser.close();
 
   console.log(`\nSession saved to ${SESSION_PATH}`);
-  console.log("You can now use the MCP to book spaces.\n");
+  console.log("Verified: Session is active. You can now book via the MCP.\n");
 }
 
 function waitForEnter(): Promise<void> {
@@ -146,7 +152,7 @@ export async function withAuthenticatedContext<T>(
 export async function checkSessionValid(): Promise<{ valid: boolean; message: string }> {
   const { existsSync } = await import("node:fs");
   if (!existsSync(SESSION_PATH)) {
-    return { valid: false, message: "No session saved. Run: npm run login" };
+    return { valid: false, message: `No session saved. ${LOGIN_SETUP_HINT}` };
   }
 
   try {
