@@ -6,6 +6,37 @@ import { BASE_URL } from "../libcal/constants.js";
 
 const LOGIN_URL = `${BASE_URL}/reserve/davis-cubes`;
 
+/** Pure helper for session probe results (unit-tested). */
+export function sessionProbeResult(
+  url: string,
+  hasLogoutLink: boolean,
+): { valid: boolean; message: string } {
+  if (url.includes("sso.unc.edu")) {
+    return { valid: false, message: "Session expired. Run: npm run login" };
+  }
+  if (hasLogoutLink) {
+    return { valid: true, message: "Session is active" };
+  }
+  return {
+    valid: false,
+    message:
+      "Not logged in. Run: npm run login — complete Onyen + Duo, wait for Logout in the browser, then press Enter",
+  };
+}
+
+export async function probeAuthenticatedContext(
+  context: BrowserContext,
+): Promise<{ valid: boolean; message: string }> {
+  const page = await context.newPage();
+  try {
+    await page.goto(LOGIN_URL, { waitUntil: "networkidle" });
+    const hasLogout = (await page.getByRole("link", { name: /logout/i }).count()) > 0;
+    return sessionProbeResult(page.url(), hasLogout);
+  } finally {
+    await page.close();
+  }
+}
+
 export async function runLoginFlow(): Promise<void> {
   ensureDataDir();
 
@@ -14,16 +45,21 @@ export async function runLoginFlow(): Promise<void> {
   const page = await context.newPage();
 
   console.log("\nOpening UNC LibCal login flow...");
-  console.log("1. Log in with your Onyen when prompted");
-  console.log("2. Wait until you see the Davis booking page logged in");
-  console.log("3. Press Enter in this terminal when done\n");
+  console.log("1. Log in with your Onyen when prompted (+ Duo if asked)");
+  console.log("2. Wait until the Davis booking page shows a Logout link");
+  console.log("3. Press Enter in this terminal only after you see Logout\n");
 
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
-
-  // User may need to click through to auth — wait up to 5 min for them to finish.
   await page.waitForTimeout(1000);
 
   await waitForEnter();
+
+  const status = await probeAuthenticatedContext(context);
+  if (!status.valid) {
+    await browser.close();
+    console.error(`\nLogin not saved: ${status.message}\n`);
+    process.exit(1);
+  }
 
   await context.storageState({ path: SESSION_PATH });
   await browser.close();
@@ -44,6 +80,7 @@ function waitForEnter(): Promise<void> {
 
 export async function withAuthenticatedContext<T>(
   fn: (context: BrowserContext) => Promise<T>,
+  options?: { persistSession?: boolean },
 ): Promise<T> {
   if (!SESSION_PATH) throw new Error("Session path not configured");
 
@@ -60,7 +97,9 @@ export async function withAuthenticatedContext<T>(
   try {
     return await fn(context);
   } finally {
-    await context.storageState({ path: SESSION_PATH });
+    if (options?.persistSession) {
+      await context.storageState({ path: SESSION_PATH });
+    }
     await browser.close();
   }
 }
@@ -72,18 +111,8 @@ export async function checkSessionValid(): Promise<{ valid: boolean; message: st
   }
 
   try {
-    return await withAuthenticatedContext(async (context) => {
-      const page = await context.newPage();
-      await page.goto(`${BASE_URL}/spaces/bookings`, { waitUntil: "networkidle" });
-
-      const url = page.url();
-      const content = await page.content();
-
-      if (url.includes("sso.unc.edu") || content.includes("Single Sign-On")) {
-        return { valid: false, message: "Session expired. Run: npm run login" };
-      }
-
-      return { valid: true, message: "Session is active" };
+    return await withAuthenticatedContext((context) => probeAuthenticatedContext(context), {
+      persistSession: false,
     });
   } catch (error) {
     return {

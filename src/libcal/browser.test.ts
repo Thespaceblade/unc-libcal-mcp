@@ -1,11 +1,30 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  calendarStepDirection,
   findSlotAtTime,
   isBookingConfirmed,
   pickEndTimeOption,
   SLOT_MATCH_TOLERANCE_PX,
 } from "../libcal/browser.js";
+
+describe("calendarStepDirection", () => {
+  it("stops when dates match", () => {
+    assert.equal(calendarStepDirection("2026-08-28", "2026-08-28"), "done");
+  });
+
+  it("steps forward for later dates", () => {
+    assert.equal(calendarStepDirection("2026-08-27", "2026-08-28"), "next");
+  });
+
+  it("steps backward for earlier dates", () => {
+    assert.equal(calendarStepDirection("2026-08-29", "2026-08-28"), "prev");
+  });
+
+  it("returns unknown when heading cannot be parsed", () => {
+    assert.equal(calendarStepDirection(null, "2026-08-28"), "unknown");
+  });
+});
 
 describe("isBookingConfirmed", () => {
   it("detects confirmation phrases", () => {

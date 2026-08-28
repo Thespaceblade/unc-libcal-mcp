@@ -26,6 +26,21 @@ The server will:
 
 ## Quick start
 
+### Already on this machine?
+
+If you already have the repo and `~/.unc-libcal/`:
+
+```bash
+cd ~/Projects/unc-libcal-mcp   # or wherever you cloned it
+npm run build
+npm test
+```
+
+- **`~/Projects/unc-libcal-mcp`** — the project (clone from GitHub)
+- **`~/.unc-libcal/`** — your private session + config (never commit this)
+
+Skip to [step 2](#2-log-in-to-libcal) if `storage-state.json` exists, or re-run login if booking fails.
+
 ### 1. Clone and install
 
 ```bash
@@ -43,7 +58,9 @@ npm test
 npm run login
 ```
 
-A browser opens → sign in with your **Onyen** (+ Duo if prompted) → when the Davis LibCal page loads, press **Enter** in the terminal.
+A browser opens → sign in with your **Onyen** (+ Duo if prompted).
+
+**Important:** wait until the Davis booking page shows a **Logout** link in the nav, then press **Enter** in the terminal. If you press Enter too early, only analytics cookies get saved and booking will fail.
 
 Your session is saved to `~/.unc-libcal/storage-state.json` (never commit this file).
 
@@ -94,6 +111,8 @@ Restart the client after editing config.
 
 File: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
+If the file is **new or empty**, paste:
+
 ```json
 {
   "mcpServers": {
@@ -105,7 +124,9 @@ File: `~/Library/Application Support/Claude/claude_desktop_config.json`
 }
 ```
 
-Fully quit and reopen Claude Desktop.
+If the file **already has other keys** (e.g. `preferences`, `coworkUserFilesPath`), add only the `unc-libcal` block inside the existing `mcpServers` object — do not replace the whole file.
+
+Fully quit and reopen Claude Desktop (Cmd+Q, not just closing the window).
 
 #### Cursor
 
@@ -182,6 +203,18 @@ Suggest Davis cubes for 2 hours tomorrow
 
 You should see `libcal_auth_status`, `libcal_suggest`, `libcal_check_availability`, `libcal_book`, and `libcal_list_calendars` available once the server is connected.
 
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `libcal_auth_status` says not logged in | Run `npm run login` — wait for **Logout** before pressing Enter |
+| Auth was "valid" but booking redirects to SSO | Re-run `npm run login` (old check was too lenient; update if you see this) |
+| `libcal_book` fails after suggest | Slot was taken — run `libcal_suggest` again |
+| Calendar event not created | Grant Automation: System Settings → Privacy & Security → Automation → allow Terminal/Cursor → Calendar |
+| MCP tools don't appear in Claude Desktop | Fully quit (Cmd+Q) and reopen; confirm `mcpServers` path points to `dist/index.js` |
+
+Sessions expire periodically. Run `npm run login` again when `libcal_auth_status` reports expired.
+
 ## MCP tools
 
 | Tool | Login required | Purpose |
@@ -227,15 +260,13 @@ Any study rooms free Friday afternoon?
 - **Booking** — Playwright drives the real LibCal UI: select slot → submit times → `/spaces/auth` checkout → confirm form
 - **Calendar** — AppleScript → Calendar.app (macOS Automation permission required)
 
-Sessions expire periodically. Run `npm run login` again when `libcal_auth_status` reports expired.
-
 ## CLI scripts
 
 ```bash
 # Refresh Onyen session
 npm run login
 
-# Run unit tests (39 tests)
+# Run unit tests (46 tests)
 npm test
 
 # Book via CLI (uses saved session)

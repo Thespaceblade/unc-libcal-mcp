@@ -4,6 +4,8 @@ import type { BookingResult } from "./types.js";
 import {
   addMinutesToDateTime,
   calendarHeadingForDate,
+  dayDiff,
+  parseCalendarHeading,
   timeTo12HourLabel,
 } from "./time.js";
 
@@ -69,35 +71,70 @@ export function pickEndTimeOption(options: string[], endLabel: string): string |
   return options.find((o) => o.toLowerCase().includes(endLower)) ?? null;
 }
 
+export const CALENDAR_NEXT_BUTTON = "button.fc-next-button";
+export const CALENDAR_PREV_BUTTON = "button.fc-prev-button";
+
+/** Decide how to move the LibCal day picker toward the target date. */
+export function calendarStepDirection(
+  currentDate: string | null,
+  targetDate: string,
+): "done" | "next" | "prev" | "unknown" {
+  if (!currentDate) return "unknown";
+  const diff = dayDiff(currentDate, targetDate);
+  if (diff === 0) return "done";
+  return diff > 0 ? "next" : "prev";
+}
+
+export async function readVisibleCalendarDate(page: Page): Promise<string | null> {
+  const headings = await page.locator("h2").allTextContents();
+  for (const raw of headings) {
+    const parsed = parseCalendarHeading(raw.trim());
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 export async function advanceToDate(page: Page, targetDate: string): Promise<void> {
-  const targetHeading = calendarHeadingForDate(targetDate);
-
   for (let i = 0; i < CALENDAR_MAX_ADVANCE_CLICKS; i++) {
-    const heading = (await page.locator("h2").first().textContent())?.trim() ?? "";
-    if (heading === targetHeading) return;
+    const current = await readVisibleCalendarDate(page);
+    const step = calendarStepDirection(current, targetDate);
+    if (step === "done") return;
+    if (step === "unknown") {
+      throw new Error(
+        `Could not read LibCal calendar date while navigating to ${calendarHeadingForDate(targetDate)}`,
+      );
+    }
 
-    const prev = heading;
-    await page
-      .locator(".s-lc-time-grid-pagination button:has-text('Next'), button.fc-next-button")
-      .first()
-      .click();
+    const selector = step === "next" ? CALENDAR_NEXT_BUTTON : CALENDAR_PREV_BUTTON;
+    const button = page.locator(selector).first();
+    if (!(await button.isVisible().catch(() => false))) {
+      throw new Error(
+        `Calendar ${step} button unavailable at ${current ?? "unknown date"} (want ${targetDate})`,
+      );
+    }
+
+    await button.click();
     await page.waitForTimeout(800);
 
-    const next = (await page.locator("h2").first().textContent())?.trim() ?? "";
-    if (next === prev) {
-      throw new Error(`Calendar did not advance from "${prev}"`);
+    const next = await readVisibleCalendarDate(page);
+    if (next === current) {
+      throw new Error(`Calendar did not advance from ${current ?? "unknown date"}`);
     }
   }
 
-  throw new Error(`Could not navigate calendar to ${targetHeading}`);
+  const stuck = await readVisibleCalendarDate(page);
+  throw new Error(
+    `Could not navigate calendar to ${calendarHeadingForDate(targetDate)} (stopped at ${stuck ?? "unknown date"})`,
+  );
 }
 
 export async function selectSlotByTimeLabel(
   page: Page,
   startLabel: string,
+  itemId?: number,
 ): Promise<string> {
   const clicked = await page.evaluate(
-    ({ label, tolerance }) => {
+    ({ label, tolerance, itemId }) => {
       const headers = [...document.querySelectorAll(".fc-timeline-slot-cushion, .fc-slot-label")];
       const targetHeader = headers.find((h) => h.textContent?.trim().toLowerCase() === label.toLowerCase());
       if (!targetHeader) return { ok: false as const, reason: "no header" };
@@ -106,6 +143,9 @@ export async function selectSlotByTimeLabel(
         targetHeader.getBoundingClientRect().left + targetHeader.getBoundingClientRect().width / 2;
 
       for (const row of [...document.querySelectorAll("[data-resource-id]")]) {
+        const resourceId = Number((row as HTMLElement).dataset.resourceId);
+        if (itemId && resourceId !== itemId) continue;
+
         for (const slot of [...row.querySelectorAll("a.s-lc-eq-avail")]) {
           const rect = slot.getBoundingClientRect();
           if (rect.width === 0) continue;
@@ -119,9 +159,12 @@ export async function selectSlotByTimeLabel(
           }
         }
       }
-      return { ok: false as const, reason: "no matching slot" };
+      return {
+        ok: false as const,
+        reason: itemId ? `no slot for room ${itemId}` : "no matching slot",
+      };
     },
-    { label: startLabel, tolerance: SLOT_MATCH_TOLERANCE_PX },
+    { label: startLabel, tolerance: SLOT_MATCH_TOLERANCE_PX, itemId: itemId ?? null },
   );
 
   if (!clicked.ok) {
@@ -216,6 +259,7 @@ export async function bookSpaceInBrowser(
     purpose: string;
     groupName?: string;
     spaceName?: string;
+    itemId?: number;
   },
 ): Promise<BookingResult> {
   const startLabel = timeTo12HourLabel(params.startTime);
@@ -225,7 +269,7 @@ export async function bookSpaceInBrowser(
   await page.goto(`${BASE_URL}${params.category.path}`, { waitUntil: "networkidle" });
   await advanceToDate(page, params.date);
 
-  const room = await selectSlotByTimeLabel(page, startLabel);
+  const room = await selectSlotByTimeLabel(page, startLabel, params.itemId);
   await page.waitForSelector(BOOKING_FORM_SELECTOR, { timeout: 10_000 });
   await setBookingEndTime(page, endLabel);
 

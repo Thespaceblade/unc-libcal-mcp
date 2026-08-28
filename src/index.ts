@@ -223,15 +223,17 @@ server.tool(
       };
     }
 
-    const result = await withAuthenticatedContext((context) =>
-      bookSpace(context, {
-        categoryId,
-        date,
-        startTime: start_time,
-        durationMinutes: duration_minutes,
-        itemId: space_id,
-        purpose: config.bookingPurpose,
-      }),
+    const result = await withAuthenticatedContext(
+      (context) =>
+        bookSpace(context, {
+          categoryId,
+          date,
+          startTime: start_time,
+          durationMinutes: duration_minutes,
+          itemId: space_id,
+          purpose: config.bookingPurpose,
+        }),
+      { persistSession: true },
     );
 
     let calendarMessage = "";

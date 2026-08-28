@@ -131,6 +131,7 @@ export async function bookSpace(
       purpose: options.purpose ?? "Study session",
       groupName: options.groupName,
       spaceName,
+      itemId,
     });
 
     return {
