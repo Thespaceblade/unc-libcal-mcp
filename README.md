@@ -58,9 +58,11 @@ npm test
 npm run login
 ```
 
-A browser opens → sign in with your **Onyen** (+ Duo if prompted).
+A browser opens to the **Davis cubes page** (this is normal — the calendar is public and does not ask for Onyen immediately).
 
-**Important:** wait until the Davis booking page shows a **Logout** link in the nav, then press **Enter** in the terminal. If you press Enter too early, only analytics cookies get saved and booking will fail.
+The script will click a test slot and **Submit Times** to send you to the **UNC Onyen login page**. Sign in (+ Duo if prompted), then you'll land back on LibCal.
+
+**Press Enter in the terminal only after you see a Logout link** on the LibCal page. That confirms the session was saved correctly.
 
 Your session is saved to `~/.unc-libcal/storage-state.json` (never commit this file).
 

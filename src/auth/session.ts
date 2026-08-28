@@ -5,6 +5,37 @@ const SESSION_PATH = process.env.SESSION_PATH ?? DEFAULT_SESSION_PATH;
 import { BASE_URL } from "../libcal/constants.js";
 
 const LOGIN_URL = `${BASE_URL}/reserve/davis-cubes`;
+const BOOKING_FORM_SELECTOR = "#s-lc-eq-form-times select";
+
+/** Click a slot and submit times to reach UNC SSO (LibCal does not prompt on page load). */
+export async function triggerLibCalLogin(page: import("playwright").Page): Promise<boolean> {
+  await page.goto(LOGIN_URL, { waitUntil: "networkidle" });
+
+  if ((await page.getByRole("link", { name: /logout/i }).count()) > 0) {
+    return true;
+  }
+
+  await page.locator("button.fc-next-button").first().click();
+  await page.waitForTimeout(800);
+
+  const clicked = await page.evaluate(() => {
+    const slot = document.querySelector("a.s-lc-eq-avail");
+    if (!slot) return false;
+    (slot as HTMLElement).click();
+    return true;
+  });
+  if (!clicked) return false;
+
+  await page.waitForSelector(BOOKING_FORM_SELECTOR, { timeout: 10_000 });
+  const select = page.locator(BOOKING_FORM_SELECTOR).first();
+  if ((await select.locator("option").count()) > 1) {
+    await select.selectOption({ index: 1 });
+  }
+
+  await page.locator('button:has-text("Submit Times")').click();
+  await page.waitForTimeout(2000);
+  return true;
+}
 
 /** Pure helper for session probe results (unit-tested). */
 export function sessionProbeResult(
@@ -44,13 +75,21 @@ export async function runLoginFlow(): Promise<void> {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  console.log("\nOpening UNC LibCal login flow...");
-  console.log("1. Log in with your Onyen when prompted (+ Duo if asked)");
-  console.log("2. Wait until the Davis booking page shows a Logout link");
-  console.log("3. Press Enter in this terminal only after you see Logout\n");
+  console.log("\nOpening UNC LibCal...");
+  console.log("The Davis cubes page is public — you won't see Onyen until we trigger a booking step.\n");
 
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1000);
+  const triggered = await triggerLibCalLogin(page).catch(() => false);
+
+  if (page.url().includes("sso.unc.edu")) {
+    console.log("UNC SSO is open — log in with your Onyen (+ Duo if asked).");
+  } else if (!triggered) {
+    console.log("Could not auto-start login. Manually: click any open slot → Submit Times.");
+  } else {
+    console.log("If you are not on the UNC login page yet, click a slot → Submit Times.");
+  }
+
+  console.log("\nAfter login, you should land back on LibCal with a Logout link visible.");
+  console.log("Press Enter here only once you see Logout (or you are clearly logged in).\n");
 
   await waitForEnter();
 
