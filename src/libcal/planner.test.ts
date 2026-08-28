@@ -59,6 +59,21 @@ describe("findDurationBlocks", () => {
     ];
     assert.equal(findDurationBlocks(mixed, date, 60).length, 0);
   });
+
+  it("returns later non-overlapping blocks after an earlier block on the same room", () => {
+    const overlapping = [
+      slot(date, "09:30", "10:00", 500),
+      slot(date, "10:00", "10:30", 500),
+      slot(date, "10:30", "11:00", 500),
+      slot(date, "11:00", "11:30", 500),
+      slot(date, "11:00", "11:30", 500),
+      slot(date, "11:30", "12:00", 500),
+      slot(date, "12:00", "12:30", 500),
+      slot(date, "12:30", "13:00", 500),
+    ];
+    const blocks = findDurationBlocks(overlapping, date, 120, "11:00");
+    assert.ok(blocks.some((b) => b.itemId === 500 && b.startTime === "11:00" && b.endTime === "13:00"));
+  });
 });
 
 describe("scoreOption", () => {

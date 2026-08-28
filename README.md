@@ -235,19 +235,18 @@ Sessions expire periodically. Run `npm run login` again when `libcal_auth_status
 # Refresh Onyen session
 npm run login
 
-# Run unit tests (38 tests)
+# Run unit tests (39 tests)
 npm test
 
 # Book via CLI (uses saved session)
 node dist/scripts/run-task.js --date 2026-09-01 --start 14:00 --duration 120
-
-# Check public bookings page / cancel-link availability
-node dist/scripts/list-bookings.js
 ```
 
 ## Cancelling bookings
 
-UNC LibCal does **not** expose a “my bookings” cancel page in the web UI. Cancel via the link in your confirmation email from `alerts@mail.libcal.com`.
+This MCP server **cannot cancel** reservations. LibCal does not expose cancel links in the web UI or any API we can call.
+
+To cancel, use the link in your **confirmation email** from `alerts@mail.libcal.com`. Search your inbox for that sender if you need an old booking.
 
 ## LibCal limits (UNC Davis)
 

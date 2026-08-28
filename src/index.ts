@@ -24,6 +24,13 @@ BOOKING WORKFLOW (required):
 4. Never auto-book a far-future date when sooner options exist.
 `.trim();
 
+const AGENT_CANCELLATION_RULES = `
+CANCELLATION (required):
+- This server cannot cancel bookings. There is no cancel tool, API, or way to look up cancel links.
+- To cancel, the user must use the link in their LibCal confirmation email from alerts@mail.libcal.com.
+- If asked to cancel, direct them to search their inbox for that sender — do not attempt automation or scraping.
+`.trim();
+
 server.tool(
   "libcal_auth_status",
   "Check whether your saved UNC LibCal login session is still valid. Run `npm run login` in the unc-libcal-mcp project if expired.",
@@ -150,7 +157,7 @@ server.tool(
 
 server.tool(
   "libcal_book",
-  `Book a specific UNC LibCal slot. ${AGENT_BOOKING_RULES} Requires user_confirmed=true. Categories: ${categoryIds}`,
+  `Book a specific UNC LibCal slot. ${AGENT_BOOKING_RULES} ${AGENT_CANCELLATION_RULES} Requires user_confirmed=true. Categories: ${categoryIds}`,
   {
     date: z.string().describe("Booking date YYYY-MM-DD (from user choice or libcal_suggest option)"),
     start_time: z.string().describe("Start time HH:MM (from user choice or libcal_suggest option)"),
@@ -248,6 +255,8 @@ server.tool(
       `Where: ${result.location}`,
       result.confirmationUrl ? `URL: ${result.confirmationUrl}` : "",
       calendarMessage ? `\nCalendar: ${calendarMessage}` : "",
+      "",
+      "To cancel later: use the link in your confirmation email from alerts@mail.libcal.com. This server cannot cancel bookings.",
     ]
       .filter(Boolean)
       .join("\n");

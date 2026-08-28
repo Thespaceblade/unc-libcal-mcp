@@ -44,6 +44,17 @@ function slotsNeeded(durationMinutes: number): number {
   return Math.ceil(durationMinutes / 30);
 }
 
+function timeToMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return localDateString(d);
+}
+
 /** Find start times where `durationMinutes` of consecutive 30-min slots exist for one room. */
 export function findDurationBlocks(
   slots: AvailabilitySlot[],
@@ -90,8 +101,15 @@ export function findDurationBlocks(
         start: first.start,
         end: last.end,
       });
-      // Skip overlapping starts on same room
-      i += need - 1;
+      // Advance to first slot at or after this block ends (avoids overlapping options).
+      const blockEndMs = new Date(last.end.replace(" ", "T")).getTime();
+      let next = i + 1;
+      while (next < sorted.length) {
+        const startMs = new Date(sorted[next].start.replace(" ", "T")).getTime();
+        if (startMs >= blockEndMs) break;
+        next++;
+      }
+      i = next - 1;
     }
   }
 
@@ -131,11 +149,12 @@ export function scoreOption(params: {
   }
 
   if (params.preferredStartTime) {
-    if (params.startTime === params.preferredStartTime) {
-      score -= 80;
+    const diff = Math.abs(timeToMinutes(params.startTime) - timeToMinutes(params.preferredStartTime));
+    if (diff === 0) {
+      score -= 200;
       reasons.push("matches your requested time");
     } else {
-      score += Math.abs(params.preferredStartTime.localeCompare(params.startTime));
+      score += diff;
     }
   }
 
@@ -165,18 +184,20 @@ export async function suggestBookingOptions(params: {
   const allOptions: BookingOption[] = [];
 
   for (let dayOffset = 0; dayOffset < prefs.searchHorizonDays; dayOffset++) {
-    const d = new Date(`${today}T12:00:00`);
-    d.setDate(d.getDate() + dayOffset);
-    const date = d.toISOString().slice(0, 10);
+    const date = addDays(today, dayOffset);
 
-    // If user asked for a specific date, still scan all days but preferred date scores better
     const slots = await client.getAvailability({
       lid: category.lid,
       gid: category.gid,
       date,
     });
 
-    const afterTime = date === today ? afterToday : undefined;
+    let afterTime = date === today ? afterToday : undefined;
+    if (params.preferredStartTime && (!params.preferredDate || params.preferredDate === date)) {
+      if (!afterTime || params.preferredStartTime > afterTime) {
+        afterTime = params.preferredStartTime;
+      }
+    }
     const blocks = findDurationBlocks(slots, date, params.durationMinutes, afterTime);
 
     for (const block of blocks) {
