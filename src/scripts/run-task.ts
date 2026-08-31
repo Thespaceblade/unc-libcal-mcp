@@ -2,7 +2,7 @@
 /** Thin CLI wrapper around the hardened browser booking module. */
 import { loadConfig } from "../config.js";
 import { withAuthenticatedContext } from "../auth/session.js";
-import { bookSpaceInBrowser } from "../libcal/browser.js";
+import { bookSpace } from "../libcal/book.js";
 import { SPACE_CATEGORIES } from "../libcal/constants.js";
 import { timeTo12HourLabel } from "../libcal/time.js";
 
@@ -43,20 +43,15 @@ async function main(): Promise<void> {
     `Booking ${category.name} ${date} ${timeTo12HourLabel(start)} (${duration} min)...`,
   );
 
-  const result = await withAuthenticatedContext(async (context) => {
-    const page = await context.newPage();
-    try {
-      return await bookSpaceInBrowser(page, {
-        category,
-        date,
-        startTime: start,
-        durationMinutes: duration,
-        purpose: config.bookingPurpose ?? "Study session",
-      });
-    } finally {
-      await page.close();
-    }
-  });
+  const result = await withAuthenticatedContext((context) =>
+    bookSpace(context, {
+      categoryId,
+      date,
+      startTime: start,
+      durationMinutes: duration,
+      purpose: config.bookingPurpose ?? "Study session",
+    }),
+  );
 
   console.log(JSON.stringify(result, null, 2));
 

@@ -2,12 +2,35 @@ import { LibCalClient, slotDate, slotStartTime } from "./client.js";
 import type { AvailabilitySlot } from "./types.js";
 import { SPACE_CATEGORIES } from "./constants.js";
 import { addMinutesToTime, dayDiff, localDateString, localTimeString } from "./time.js";
+import {
+  findPiecemealPlans,
+  parseTimeWindow,
+  type WindowSegment,
+} from "./coverage.js";
 
-export interface PlannerPreferences {
-  preferSameDay: boolean;
-  minLeadMinutes: number;
-  searchHorizonDays: number;
-  timezone?: string;
+export type PlanStrategy =
+  | "single_cube"
+  | "single_cube_in_window"
+  | "single_cube_partial_window"
+  | "piecemeal_in_window"
+  | "single_cube_alt_time";
+
+export interface RecommendedPlan {
+  optionId: number;
+  strategy: PlanStrategy;
+  bookWith: "libcal_book" | "libcal_book_piecemeal";
+  categoryId: string;
+  date: string;
+  label: string;
+  reason: string;
+  score: number;
+  startTime?: string;
+  endTime?: string;
+  durationMinutes?: number;
+  itemId?: number;
+  segments?: WindowSegment[];
+  gapMinutes?: number;
+  coveredMinutes?: number;
 }
 
 export interface BookingOption {
@@ -21,6 +44,9 @@ export interface BookingOption {
   label: string;
   reason: string;
   score: number;
+  strategy?: PlanStrategy;
+  bookWith?: "libcal_book" | "libcal_book_piecemeal";
+  segments?: WindowSegment[];
 }
 
 const DEFAULT_PREFS: PlannerPreferences = {
@@ -161,18 +187,120 @@ export function scoreOption(params: {
   return { score, reason: reasons.join("; ") };
 }
 
-export async function suggestBookingOptions(params: {
+function spaceLabel(itemId: number, spaceNames?: Map<number, string>): string {
+  return spaceNames?.get(itemId) ?? `room ${itemId}`;
+}
+
+function planSignature(plan: RecommendedPlan): string {
+  if (plan.segments?.length) {
+    return `${plan.date}|${plan.segments.map((s) => `${s.itemId}@${s.startTime}-${s.endTime}`).join("+")}`;
+  }
+  return `${plan.date}|${plan.itemId}@${plan.startTime}-${plan.endTime}`;
+}
+
+function blockInsideWindow(
+  startTime: string,
+  endTime: string,
+  windowStart: string,
+  windowEnd: string,
+): boolean {
+  const start = timeToMinutes(startTime);
+  let end = timeToMinutes(endTime);
+  if (end <= start) return false;
+  return start >= timeToMinutes(windowStart) && end <= timeToMinutes(windowEnd);
+}
+
+function blockOverlapsWindow(
+  startTime: string,
+  endTime: string,
+  windowStart: string,
+  windowEnd: string,
+): boolean {
+  const start = timeToMinutes(startTime);
+  let end = timeToMinutes(endTime);
+  if (end <= start) end += 24 * 60;
+  const wStart = timeToMinutes(windowStart);
+  const wEnd = timeToMinutes(windowEnd);
+  return start < wEnd && end > wStart;
+}
+
+export function scoreRecommendedPlan(params: {
+  plan: RecommendedPlan;
+  today: string;
+  preferSameDay: boolean;
+  preferredDate?: string;
+  preferredStartTime?: string;
+  windowStart?: string;
+  windowEnd?: string;
+}): { score: number; reason: string } {
+  const { plan } = params;
+  const startTime = plan.startTime ?? plan.segments?.[0]?.startTime ?? "00:00";
+  const base = scoreOption({
+    date: plan.date,
+    startTime,
+    today: params.today,
+    preferSameDay: params.preferSameDay,
+    preferredDate: params.preferredDate,
+    preferredStartTime: params.preferredStartTime,
+  });
+
+  let score = base.score;
+  const reasons = [base.reason];
+
+  if (params.windowStart && params.windowEnd) {
+    const windowMinutes = timeToMinutes(params.windowEnd) - timeToMinutes(params.windowStart);
+
+    switch (plan.strategy) {
+      case "single_cube_in_window":
+        score -= 600;
+        reasons.push("one cube covers your full requested window");
+        break;
+      case "piecemeal_in_window":
+        if ((plan.gapMinutes ?? 0) === 0) {
+          score -= 550;
+          reasons.push("piecemeal covers your full requested window");
+        } else {
+          score -= 350 - (plan.gapMinutes ?? 0);
+          reasons.push(`piecemeal covers ${plan.coveredMinutes}/${windowMinutes} min of your window`);
+        }
+        break;
+      case "single_cube_partial_window":
+        score -= 250 - (windowMinutes - (plan.coveredMinutes ?? 0));
+        reasons.push(`one cube partially fits your window (${plan.coveredMinutes}/${windowMinutes} min)`);
+        break;
+      case "single_cube_alt_time":
+        score += 300;
+        reasons.push("same day, different time than requested window");
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (plan.bookWith === "libcal_book") {
+    score -= 30;
+    reasons.push("single booking");
+  } else {
+    reasons.push("requires multiple bookings");
+  }
+
+  return { score, reason: reasons.join("; ") };
+}
+
+/** Unified planner: single-cube, piecemeal, partial-window, and alternate-time options ranked together. */
+export async function recommendBookingPlans(params: {
   categoryId: string;
   durationMinutes: number;
   preferredDate?: string;
   preferredStartTime?: string;
+  windowStart?: string;
+  windowEnd?: string;
   maxOptions?: number;
   prefs?: Partial<PlannerPreferences>;
-}): Promise<{ options: BookingOption[]; message: string }> {
+  spaceNames?: Map<number, string>;
+}): Promise<{ plans: RecommendedPlan[]; message: string; window?: { start: string; end: string } }> {
   const category = SPACE_CATEGORIES[params.categoryId];
-  if (!category) {
-    throw new Error(`Unknown category: ${params.categoryId}`);
-  }
+  if (!category) throw new Error(`Unknown category: ${params.categoryId}`);
 
   const prefs = { ...DEFAULT_PREFS, ...params.prefs };
   const today = localDateString();
@@ -181,11 +309,18 @@ export async function suggestBookingOptions(params: {
   const maxOptions = params.maxOptions ?? 5;
   const client = new LibCalClient();
 
-  const allOptions: BookingOption[] = [];
+  const window = params.windowStart && params.windowEnd
+    ? parseTimeWindow(params.windowStart, params.windowEnd)
+    : undefined;
+  const targetDuration = window
+    ? timeToMinutes(window.windowEnd) - timeToMinutes(window.windowStart)
+    : params.durationMinutes;
+  const focusDate = params.preferredDate ?? today;
+
+  const candidates: RecommendedPlan[] = [];
 
   for (let dayOffset = 0; dayOffset < prefs.searchHorizonDays; dayOffset++) {
     const date = addDays(today, dayOffset);
-
     const slots = await client.getAvailability({
       lid: category.lid,
       gid: category.gid,
@@ -198,73 +333,195 @@ export async function suggestBookingOptions(params: {
         afterTime = params.preferredStartTime;
       }
     }
-    const blocks = findDurationBlocks(slots, date, params.durationMinutes, afterTime);
+
+    const blocks = findDurationBlocks(slots, date, targetDuration, afterTime);
+    const analyzeWindow = window && date === focusDate;
+
+    if (analyzeWindow) {
+      const piecemealPlans = findPiecemealPlans(
+        slots,
+        date,
+        window.windowStart,
+        window.windowEnd,
+        params.spaceNames,
+        4,
+      );
+
+      for (const piecemeal of piecemealPlans) {
+        if (piecemeal.segments.length === 0) continue;
+        const strategy: PlanStrategy =
+          piecemeal.segments.length === 1 ? "single_cube_partial_window" : "piecemeal_in_window";
+        const day = dateLabel(date, today);
+        candidates.push({
+          optionId: 0,
+          strategy,
+          bookWith: piecemeal.segments.length === 1 ? "libcal_book" : "libcal_book_piecemeal",
+          categoryId: params.categoryId,
+          date,
+          label: `${day} · ${piecemeal.label}`,
+          reason: piecemeal.reason,
+          score: 0,
+          segments: piecemeal.segments.length === 1 ? undefined : piecemeal.segments,
+          gapMinutes: piecemeal.gapMinutes,
+          coveredMinutes: piecemeal.coveredMinutes,
+          startTime: piecemeal.segments[0]?.startTime,
+          endTime: piecemeal.segments[piecemeal.segments.length - 1]?.endTime,
+          durationMinutes:
+            piecemeal.segments.length === 1
+              ? piecemeal.segments[0]?.durationMinutes
+              : piecemeal.coveredMinutes,
+          itemId: piecemeal.segments[0]?.itemId,
+        });
+      }
+    }
 
     for (const block of blocks) {
-      const { score, reason } = scoreOption({
-        date,
-        startTime: block.startTime,
-        today,
-        preferSameDay: prefs.preferSameDay,
-        preferredDate: params.preferredDate,
-        preferredStartTime: params.preferredStartTime,
-      });
+      const day = dateLabel(date, today);
+      const durationHrs = targetDuration / 60;
+      let strategy: PlanStrategy = "single_cube";
 
-      const dayLabel = dateLabel(date, today);
-      const durationHrs = params.durationMinutes / 60;
-      const label = `${dayLabel} · ${block.startTime}–${block.endTime} · room ${block.itemId} · ${durationHrs}hr`;
+      if (analyzeWindow) {
+        if (blockInsideWindow(block.startTime, block.endTime, window.windowStart, window.windowEnd)) {
+          strategy = "single_cube_in_window";
+        } else if (blockOverlapsWindow(block.startTime, block.endTime, window.windowStart, window.windowEnd)) {
+          continue;
+        } else if (date === focusDate) {
+          strategy = "single_cube_alt_time";
+        }
+      }
 
-      allOptions.push({
+      candidates.push({
         optionId: 0,
+        strategy,
+        bookWith: "libcal_book",
+        categoryId: params.categoryId,
         date,
+        label: `${day} · ${spaceLabel(block.itemId, params.spaceNames)} ${block.startTime}–${block.endTime} · ${durationHrs}hr`,
+        reason: "",
+        score: 0,
         startTime: block.startTime,
         endTime: block.endTime,
-        durationMinutes: params.durationMinutes,
+        durationMinutes: targetDuration,
         itemId: block.itemId,
-        categoryId: params.categoryId,
-        label,
-        reason,
-        score,
+        coveredMinutes: targetDuration,
+        gapMinutes: 0,
       });
     }
   }
 
-  allOptions.sort((a, b) => a.score - b.score || a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+  const unique = new Map<string, RecommendedPlan>();
+  for (const candidate of candidates) {
+    const key = planSignature(candidate);
+    const existing = unique.get(key);
+    if (!existing || (candidate.coveredMinutes ?? 0) > (existing.coveredMinutes ?? 0)) {
+      unique.set(key, candidate);
+    }
+  }
 
-  const unique = allOptions.filter(
-    (opt, i, arr) =>
-      arr.findIndex(
-        (o) => o.date === opt.date && o.startTime === opt.startTime && o.itemId === opt.itemId,
-      ) === i,
+  const scored = [...unique.values()].map((plan) => {
+    const { score, reason } = scoreRecommendedPlan({
+      plan,
+      today,
+      preferSameDay: prefs.preferSameDay,
+      preferredDate: params.preferredDate ?? (window ? focusDate : undefined),
+      preferredStartTime: params.preferredStartTime ?? window?.windowStart,
+      windowStart: window?.windowStart,
+      windowEnd: window?.windowEnd,
+    });
+    return { ...plan, score, reason };
+  });
+
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.date.localeCompare(b.date) ||
+      (a.startTime ?? "").localeCompare(b.startTime ?? ""),
   );
 
-  const top = unique.slice(0, maxOptions).map((o, i) => ({ ...o, optionId: i + 1 }));
+  const top = scored.slice(0, maxOptions).map((plan, index) => ({ ...plan, optionId: index + 1 }));
 
   if (top.length === 0) {
+    const windowHint = window ? ` for ${window.windowStart}–${window.windowEnd}` : "";
     return {
-      options: [],
-      message: `No ${params.durationMinutes}-minute blocks found in the next ${prefs.searchHorizonDays} days for ${category.name}. Try shorter duration or a different category.`,
+      plans: [],
+      window: window ? { start: window.windowStart, end: window.windowEnd } : undefined,
+      message: `No bookable options${windowHint} in the next ${prefs.searchHorizonDays} days for ${category.name}. Try a shorter window or different day.`,
     };
   }
 
-  const lines = top.map(
-    (o) =>
-      `[${o.optionId}] ${o.label}\n    Why: ${o.reason}${o.optionId === 1 ? " ← recommended" : ""}`,
-  );
+  const lines = top.map((plan) => {
+    const bookHint =
+      plan.bookWith === "libcal_book_piecemeal"
+        ? "book with libcal_book_piecemeal"
+        : "book with libcal_book";
+    return `[${plan.optionId}] ${plan.label}\n    ${plan.reason}\n    ${bookHint}${plan.optionId === 1 ? " ← recommended" : ""}`;
+  });
+
+  const header = window
+    ? `Best options for ${category.name} on ${focusDate === today ? "today" : focusDate}, window ${window.windowStart}–${window.windowEnd} (${targetDuration} min):`
+  : `Best options for ${category.name} (${targetDuration} min):`;
 
   const message = [
-    `Found ${top.length} option(s) for ${category.name} (${params.durationMinutes} min).`,
-    prefs.preferSameDay ? "Ranking prioritizes same-day, then soonest date/time." : "",
+    header,
+    "Compared single-cube, piecemeal multi-cube, partial-window, and alternate-time options across all cubes.",
     "",
-  ...lines,
+    ...lines,
     "",
-    "Ask the user which option to book, then call libcal_book with that option's date, start_time, space_id, and duration_minutes.",
-    "Do NOT book without user confirmation.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "Present these to the user and only book after they pick one.",
+    "Single options → libcal_book. Multi-segment options → libcal_book_piecemeal.",
+  ].join("\n");
 
-  return { options: top, message };
+  return {
+    plans: top,
+    message,
+    window: window ? { start: window.windowStart, end: window.windowEnd } : undefined,
+  };
+}
+
+export interface PlannerPreferences {
+  preferSameDay: boolean;
+  minLeadMinutes: number;
+  searchHorizonDays: number;
+  timezone?: string;
+}
+
+export async function suggestBookingOptions(params: {
+  categoryId: string;
+  durationMinutes: number;
+  preferredDate?: string;
+  preferredStartTime?: string;
+  windowStart?: string;
+  windowEnd?: string;
+  maxOptions?: number;
+  prefs?: Partial<PlannerPreferences>;
+  spaceNames?: Map<number, string>;
+}): Promise<{ options: BookingOption[]; message: string }> {
+  const { plans, message } = await recommendBookingPlans(params);
+
+  const options: BookingOption[] = plans.map((plan) => ({
+    optionId: plan.optionId,
+    date: plan.date,
+    startTime: plan.startTime ?? plan.segments?.[0]?.startTime ?? "",
+    endTime: plan.endTime ?? plan.segments?.[plan.segments.length - 1]?.endTime ?? "",
+    durationMinutes: plan.durationMinutes ?? plan.coveredMinutes ?? params.durationMinutes,
+    itemId: plan.itemId ?? plan.segments?.[0]?.itemId ?? 0,
+    categoryId: plan.categoryId,
+    label: plan.label,
+    reason: plan.reason,
+    score: plan.score,
+    strategy: plan.strategy,
+    bookWith: plan.bookWith,
+    segments: plan.segments,
+  }));
+
+  const duration = params.windowStart && params.windowEnd
+    ? undefined
+    : `\n\n(Duration: ${formatDurationHint(params.durationMinutes)})`;
+
+  return {
+    options,
+    message: message + (duration ?? ""),
+  };
 }
 
 export function formatDurationHint(minutes: number): string {

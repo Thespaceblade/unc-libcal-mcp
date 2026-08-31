@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { findDurationBlocks, formatDurationHint, scoreOption } from "../libcal/planner.js";
+import {
+  findDurationBlocks,
+  formatDurationHint,
+  recommendBookingPlans,
+  scoreOption,
+} from "../libcal/planner.js";
+import { LibCalClient } from "../libcal/client.js";
 import type { AvailabilitySlot } from "../libcal/types.js";
 
 function slot(
@@ -139,5 +145,46 @@ describe("formatDurationHint", () => {
   it("labels max duration", () => {
     assert.match(formatDurationHint(180), /3 hours/);
     assert.equal(formatDurationHint(60), "1 hour(s)");
+  });
+});
+
+describe("recommendBookingPlans", () => {
+  it("ranks partial window coverage above alternate times on the same day", async () => {
+    const date = "2026-08-31";
+    const slots: AvailabilitySlot[] = [
+      slot(date, "11:30", "12:00", 6),
+      slot(date, "12:00", "12:30", 6),
+      slot(date, "12:30", "13:00", 6),
+      slot(date, "16:00", "16:30", 2),
+      slot(date, "16:30", "17:00", 2),
+      slot(date, "17:00", "17:30", 2),
+      slot(date, "17:30", "18:00", 2),
+    ];
+
+    const original = LibCalClient.prototype.getAvailability;
+    LibCalClient.prototype.getAvailability = async () => slots;
+
+    try {
+      const { plans } = await recommendBookingPlans({
+        categoryId: "davis-cubes",
+        durationMinutes: 120,
+        preferredDate: date,
+        windowStart: "11",
+        windowEnd: "1",
+        maxOptions: 5,
+        prefs: { searchHorizonDays: 1, minLeadMinutes: 0, preferSameDay: true },
+      });
+
+      assert.ok(plans.length >= 2);
+      assert.match(plans[0]?.label ?? "", /11:30/);
+      assert.ok(
+        plans[0]?.strategy === "single_cube_partial_window" ||
+          plans[0]?.strategy === "piecemeal_in_window",
+      );
+      const alt = plans.find((plan) => plan.strategy === "single_cube_alt_time");
+      if (alt && plans[0]) assert.ok(plans[0].score < alt.score);
+    } finally {
+      LibCalClient.prototype.getAvailability = original;
+    }
   });
 });

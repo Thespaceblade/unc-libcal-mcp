@@ -13,7 +13,13 @@ import {
 
 export const SLOT_MATCH_TOLERANCE_PX = 24;
 export const CALENDAR_MAX_ADVANCE_CLICKS = 14;
-export const BOOKING_FORM_SELECTOR = "#s-lc-eq-form-times select";
+export const BOOKING_FORM_SELECTOR = "#s-lc-eq-form-times select.b-end-date";
+
+export interface CheckoutHold {
+  spaceName: string;
+  fromLabel: string;
+  toLabel: string;
+}
 
 /** LibCal rows use data-resource-id like "eid_29085"; API itemId is 29085. */
 export function parseResourceItemId(resourceId: string | undefined): number | null {
@@ -34,23 +40,27 @@ export interface SlotTarget {
   room?: string;
 }
 
-/** Detect LibCal booking confirmation in page HTML. */
+/** Detect LibCal booking confirmation in page HTML (not the pre-submit hold page). */
 export function isBookingConfirmed(content: string): boolean {
+  if (/these times will be held for you/i.test(content)) return false;
+  if (/continue to complete your booking/i.test(content)) return false;
+
   return (
     /booking\s+confirmed/i.test(content) ||
     /your booking has been submitted/i.test(content) ||
-    /booking confirmation/i.test(content) ||
     /successfully booked/i.test(content) ||
     /booking complete/i.test(content)
   );
 }
 
-/** Drop held slots from a login/checkout page so npm run login cannot accidentally book. */
+/** Drop held slots from login checkout and clear cart cookies. */
 export async function abandonHeldBookings(page: Page): Promise<number> {
   let removed = 0;
-  const removeButtons = page.getByRole("button", { name: /^Remove$/i });
-  while ((await removeButtons.count()) > 0) {
-    await removeButtons.first().click();
+  const removeLocator = page.getByRole("button", { name: /^Remove$/i }).or(
+    page.getByRole("link", { name: /^Remove$/i }),
+  );
+  while ((await removeLocator.count()) > 0) {
+    await removeLocator.first().click();
     await page.waitForTimeout(500);
     removed++;
   }
@@ -72,6 +82,40 @@ export function buildSlotHeaders(
     .filter((h) => h.label.length > 0);
 }
 
+function timeLabelToMinutes(label: string): number | null {
+  const hhmm = parse12HourLabelPrefix(label);
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/** Map a LibCal time label to a horizontal center, interpolating between hour headers. */
+export function resolveTargetCenterX(headers: SlotHeader[], startLabel: string): number | null {
+  const exact = headers.find((h) => h.label.toLowerCase() === startLabel.toLowerCase());
+  if (exact) return exact.centerX;
+
+  const targetMin = timeLabelToMinutes(startLabel);
+  if (targetMin === null) return null;
+
+  const sorted = headers
+    .map((h) => ({ ...h, min: timeLabelToMinutes(h.label) }))
+    .filter((h): h is SlotHeader & { min: number } => h.min !== null)
+    .sort((a, b) => a.min - b.min);
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const left = sorted[i];
+    const right = sorted[i + 1];
+    if (targetMin < left.min || targetMin > right.min) continue;
+
+    const span = right.min - left.min;
+    if (span === 0) return left.centerX;
+    const fraction = (targetMin - left.min) / span;
+    return left.centerX + fraction * (right.centerX - left.centerX);
+  }
+
+  return null;
+}
+
 /** Pick first available slot whose center aligns with a start-time header. */
 export function findSlotAtTime(
   headers: SlotHeader[],
@@ -79,11 +123,11 @@ export function findSlotAtTime(
   startLabel: string,
   tolerancePx = SLOT_MATCH_TOLERANCE_PX,
 ): SlotTarget | null {
-  const target = headers.find((h) => h.label.toLowerCase() === startLabel.toLowerCase());
-  if (!target) return null;
+  const targetX = resolveTargetCenterX(headers, startLabel);
+  if (targetX === null) return null;
 
   for (const slot of slots) {
-    if (Math.abs(slot.centerX - target.centerX) <= tolerancePx) {
+    if (Math.abs(slot.centerX - targetX) <= tolerancePx) {
       return slot;
     }
   }
@@ -93,35 +137,12 @@ export function findSlotAtTime(
 /** Pick dropdown option text that ends at the requested wall-clock time. */
 export function pickEndTimeOption(options: string[], endLabel: string): string | null {
   const endLower = endLabel.toLowerCase();
-  return options.find((option) => option.trim().toLowerCase().startsWith(endLower)) ?? null;
-}
-
-/** True when a LibCal dropdown option begins with the requested end time. */
-export function optionMatchesEndTime(optionText: string, endLabel: string): boolean {
-  return optionText.trim().toLowerCase().startsWith(endLabel.toLowerCase());
-}
-
-/** Parse booked start/end times from LibCal confirmation HTML. */
-export function parseBookingTimesFromHtml(html: string): { start?: string; end?: string } {
-  const fromTo = html.match(
-    /from[:\s]*(\d{1,2}:\d{2}\s*(?:am|pm))[\s\S]{0,300}?to[:\s]*(\d{1,2}:\d{2}\s*(?:am|pm))/i,
-  );
-  if (fromTo) {
-    return {
-      start: parse12HourLabelPrefix(fromTo[1]) ?? undefined,
-      end: parse12HourLabelPrefix(fromTo[2]) ?? undefined,
-    };
-  }
-
-  const labels = [...html.matchAll(/(\d{1,2}:\d{2}\s*(?:am|pm))/gi)].map((match) => match[1]);
-  if (labels.length >= 2) {
-    return {
-      start: parse12HourLabelPrefix(labels[0]) ?? undefined,
-      end: parse12HourLabelPrefix(labels[1]) ?? undefined,
-    };
-  }
-
-  return {};
+  const exact = options.find((o) => {
+    const lower = o.toLowerCase();
+    return lower.startsWith(endLower) || lower.includes(` ${endLower}`);
+  });
+  if (exact) return exact;
+  return options.find((o) => o.toLowerCase().includes(endLower)) ?? null;
 }
 
 export const CALENDAR_NEXT_BUTTON = "button.fc-next-button";
@@ -188,12 +209,51 @@ export async function selectSlotByTimeLabel(
 ): Promise<string> {
   const clicked = await page.evaluate(
     ({ label, tolerance, itemId }) => {
-      const headers = [...document.querySelectorAll(".fc-timeline-slot-cushion, .fc-slot-label")];
-      const targetHeader = headers.find((h) => h.textContent?.trim().toLowerCase() === label.toLowerCase());
-      if (!targetHeader) return { ok: false as const, reason: "no header" };
+      const headerEls = [...document.querySelectorAll(".fc-timeline-slot-cushion, .fc-slot-label")];
+      const headers = headerEls.map((h) => {
+        const rect = h.getBoundingClientRect();
+        return {
+          label: h.textContent?.trim() ?? "",
+          centerX: rect.left + rect.width / 2,
+        };
+      });
 
-      const targetX =
-        targetHeader.getBoundingClientRect().left + targetHeader.getBoundingClientRect().width / 2;
+      const parseMinutes = (value: string): number | null => {
+        const match = value.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)\b/i);
+        if (!match) return null;
+        let hour = Number(match[1]);
+        const minute = Number(match[2]);
+        const period = match[3].toLowerCase();
+        if (period === "pm" && hour !== 12) hour += 12;
+        if (period === "am" && hour === 12) hour = 0;
+        return hour * 60 + minute;
+      };
+
+      const resolveTargetX = (startLabel: string): number | null => {
+        const exact = headers.find((h) => h.label.toLowerCase() === startLabel.toLowerCase());
+        if (exact) return exact.centerX;
+
+        const targetMin = parseMinutes(startLabel);
+        if (targetMin === null) return null;
+
+        const sorted = headers
+          .map((h) => ({ ...h, min: parseMinutes(h.label) }))
+          .filter((h): h is typeof h & { min: number } => h.min !== null)
+          .sort((a, b) => a.min - b.min);
+
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const left = sorted[i];
+          const right = sorted[i + 1];
+          if (targetMin < left.min || targetMin > right.min) continue;
+          const span = right.min - left.min;
+          if (span === 0) return left.centerX;
+          return left.centerX + ((targetMin - left.min) / span) * (right.centerX - left.centerX);
+        }
+        return null;
+      };
+
+      const targetX = resolveTargetX(label);
+      if (targetX === null) return { ok: false as const, reason: "no header" };
 
       for (const row of [...document.querySelectorAll("[data-resource-id]")]) {
         const resourceId = (row as HTMLElement).dataset.resourceId ?? "";
@@ -234,64 +294,122 @@ export async function selectSlotByTimeLabel(
   return clicked.room;
 }
 
-export async function readSelectedEndOption(page: Page): Promise<string | null> {
+async function readEndTimeControl(page: Page) {
   const control = page.locator(BOOKING_FORM_SELECTOR).first();
-  if ((await control.count()) === 0) return null;
-
-  return control.evaluate((element) => {
-    const select = element as HTMLSelectElement;
-    return select.options[select.selectedIndex]?.textContent?.trim() ?? null;
-  });
-}
-
-export async function setBookingEndTime(page: Page, endLabel: string): Promise<void> {
-  const control = page.locator(
-    `${BOOKING_FORM_SELECTOR}, [role='region'][aria-label*='booking form' i] select, [role='region'][aria-label*='booking form' i] [role='combobox']`,
-  ).first();
-
   if ((await control.count()) === 0) {
     throw new Error("Booking end-time dropdown not found");
   }
+  return control;
+}
 
+export async function readSelectedEndLabel(page: Page): Promise<string> {
+  const control = await readEndTimeControl(page);
+  return control.evaluate(
+    (el) => (el as HTMLSelectElement).options[(el as HTMLSelectElement).selectedIndex]?.textContent?.trim() ?? "",
+  );
+}
+
+/** Wait for LibCal to populate end-time options, select the target, and verify it stuck. */
+export async function setBookingEndTime(page: Page, endLabel: string): Promise<void> {
+  const control = await readEndTimeControl(page);
   const tag = await control.evaluate((el) => el.tagName.toLowerCase());
-  if (tag === "select") {
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const options = await control.locator("option").allTextContents();
-      const match = pickEndTimeOption(options, endLabel);
-      if (match) {
-        await control.selectOption({ label: match });
-        await control.evaluate((element) => {
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-        });
-        await page.waitForTimeout(200);
+  if (tag !== "select") {
+    throw new Error(`Unexpected end-time control type: ${tag}`);
+  }
 
-        const selected = await readSelectedEndOption(page);
-        if (selected && optionMatchesEndTime(selected, endLabel)) {
-          return;
-        }
-      }
-      await page.waitForTimeout(150);
+  const deadline = Date.now() + 10_000;
+  let match: string | null = null;
+  let optionValue: string | null = null;
+
+  while (Date.now() < deadline) {
+    const options = await control.locator("option").evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        label: node.textContent?.trim() ?? "",
+        value: (node as HTMLOptionElement).value,
+      })),
+    );
+    const labels = options.map((option) => option.label);
+    match = pickEndTimeOption(labels, endLabel);
+    if (match) {
+      optionValue = options.find((option) => option.label === match)?.value ?? null;
+      break;
     }
+    await page.waitForTimeout(200);
+  }
 
+  if (!match || !optionValue) {
     const options = await control.locator("option").allTextContents();
-    const selected = await readSelectedEndOption(page);
+    throw new Error(`End time ${endLabel} not in options: ${options.join(" | ")}`);
+  }
+
+  await control.selectOption({ value: optionValue });
+  await page.waitForTimeout(150);
+
+  const selected = await readSelectedEndLabel(page);
+  if (!selected.toLowerCase().startsWith(endLabel.toLowerCase())) {
+    throw new Error(`End time did not stick (wanted ${endLabel}, selected ${selected || "empty"})`);
+  }
+}
+
+/** Read the held booking row shown after Submit Times. */
+export async function readCheckoutHold(page: Page): Promise<CheckoutHold> {
+  const hold = await page.evaluate(() => {
+    const timePattern = /\d{1,2}:\d{2}\s*(am|pm)/i;
+
+    for (const row of [...document.querySelectorAll("table tr")]) {
+      const cells = [...row.querySelectorAll("td")].map((cell) => cell.textContent?.trim() ?? "");
+      if (cells.length < 3) continue;
+
+      const timeCells = cells.filter((cell) => timePattern.test(cell));
+      if (timeCells.length < 2) continue;
+
+      const fromLabel = timeCells[0];
+      const toLabel = timeCells[1];
+      const spaceName = cells.find((cell) => cell && !timePattern.test(cell) && !/collaboration cubes/i.test(cell)) ?? "space";
+
+      if (spaceName && fromLabel && toLabel) {
+        return { spaceName, fromLabel, toLabel };
+      }
+    }
+    return null;
+  });
+
+  if (!hold) {
+    throw new Error("Could not read held booking times from checkout page");
+  }
+  return hold;
+}
+
+export function assertCheckoutHoldMatches(
+  hold: CheckoutHold,
+  expected: { startLabel: string; endLabel: string; durationMinutes: number },
+): void {
+  const from = parse12HourLabelPrefix(hold.fromLabel);
+  const to = parse12HourLabelPrefix(hold.toLabel);
+  const expectedEnd = parse12HourLabelPrefix(expected.endLabel);
+
+  if (!from || !to || !expectedEnd) {
+    throw new Error(`Could not parse checkout hold times: ${hold.fromLabel} – ${hold.toLabel}`);
+  }
+
+  if (from !== parse12HourLabelPrefix(expected.startLabel)) {
     throw new Error(
-      `Failed to set booking end time to ${endLabel}. Selected: ${selected ?? "none"}. Options: ${options.join(" | ")}`,
+      `Checkout start is ${hold.fromLabel}, expected ${expected.startLabel} (${hold.spaceName})`,
     );
   }
 
-  await control.click({ force: true });
-  const escaped = endLabel.replace(":", "\\:");
-  const option = page.getByRole("option", { name: new RegExp(`^${escaped}`, "i") }).first();
-  if (await option.isVisible().catch(() => false)) {
-    await option.click();
-    return;
+  if (to !== expectedEnd) {
+    throw new Error(
+      `Checkout end is ${hold.toLabel}, expected ${expected.endLabel} — booking would only be ${from}–${to}`,
+    );
   }
 
-  const options = await page.getByRole("option").allTextContents();
-  const match = pickEndTimeOption(options, endLabel);
-  if (!match) throw new Error(`End time ${endLabel} not in options: ${options.join(" | ")}`);
-  await page.getByRole("option", { name: match }).click();
+  const actualMinutes = timeDiffMinutes(from, to);
+  if (actualMinutes !== expected.durationMinutes) {
+    throw new Error(
+      `Checkout duration is ${actualMinutes} min (${hold.fromLabel} – ${hold.toLabel}), expected ${expected.durationMinutes} min`,
+    );
+  }
 }
 
 export async function completeCheckout(
@@ -377,15 +495,6 @@ export async function bookSpaceInBrowser(
   await page.waitForSelector(BOOKING_FORM_SELECTOR, { timeout: 10_000 });
   await setBookingEndTime(page, endLabel);
 
-  const selectedEnd = await readSelectedEndOption(page);
-  const selectedEndHhmm = selectedEnd ? parse12HourLabelPrefix(selectedEnd) : null;
-  const expectedEndHhmm = endTime.split(" ")[1]?.slice(0, 5) ?? "";
-  if (!selectedEndHhmm || selectedEndHhmm !== expectedEndHhmm) {
-    throw new Error(
-      `End time verification failed before submit. Wanted ${endLabel} (${expectedEndHhmm}), form has ${selectedEnd ?? "nothing"}.`,
-    );
-  }
-
   await page.locator('button:has-text("Submit Times")').click();
   await page.waitForURL(/\/spaces\/auth|sso\.unc\.edu/, { timeout: 15_000 }).catch(() => undefined);
   await page.waitForTimeout(1000);
@@ -397,6 +506,13 @@ export async function bookSpaceInBrowser(
     throw new Error(`Booking did not reach checkout (stuck at ${page.url()})`);
   }
 
+  const hold = await readCheckoutHold(page);
+  assertCheckoutHoldMatches(hold, {
+    startLabel,
+    endLabel,
+    durationMinutes: params.durationMinutes,
+  });
+
   await completeCheckout(page, {
     purpose: params.purpose,
     groupName: params.groupName,
@@ -404,38 +520,15 @@ export async function bookSpaceInBrowser(
 
   const body = await page.content();
   const confirmed = isBookingConfirmed(body);
-  const parsedTimes = parseBookingTimesFromHtml(body);
-  const bookedStartHhmm = parsedTimes.start ?? params.startTime;
-  const bookedEndHhmm = parsedTimes.end ?? selectedEndHhmm ?? expectedEndHhmm;
-  const bookedStart = `${params.date} ${bookedStartHhmm}:00`;
-  const bookedEnd = `${params.date} ${bookedEndHhmm}:00`;
-  const bookedMinutes = timeDiffMinutes(bookedStartHhmm, bookedEndHhmm);
-
-  if (bookedMinutes < params.durationMinutes) {
-    return {
-      success: false,
-      spaceName: params.spaceName ?? room,
-      itemId: params.itemId ?? 0,
-      start: bookedStart,
-      end: bookedEnd,
-      location: `Davis Library — ${params.category.name}`,
-      confirmationUrl: page.url(),
-      message:
-        `Booked only ${bookedMinutes} minutes (${bookedStartHhmm}–${bookedEndHhmm}), ` +
-        `not the requested ${params.durationMinutes} minutes. Cancel via your LibCal confirmation email and retry.`,
-    };
-  }
 
   return {
     success: confirmed,
-    spaceName: params.spaceName ?? room,
-    itemId: params.itemId ?? 0,
-    start: bookedStart,
-    end: bookedEnd,
+    spaceName: hold.spaceName || params.spaceName || room,
+    itemId: 0,
+    start: `${params.date} ${params.startTime}:00`,
+    end: endTime,
     location: `Davis Library — ${params.category.name}`,
     confirmationUrl: page.url(),
-    message: confirmed
-      ? `Booking confirmed (${bookedStartHhmm}–${bookedEndHhmm})`
-      : "Booking may be pending — check LibCal or your email",
+    message: confirmed ? "Booking confirmed" : "Booking may be pending — check LibCal or your email",
   };
 }

@@ -4,8 +4,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { checkSessionValid, LOGIN_SETUP_HINT, withAuthenticatedContext } from "./auth/session.js";
-import { bookSpace, listAvailability } from "./libcal/book.js";
-import { suggestBookingOptions, formatDurationHint } from "./libcal/planner.js";
+import { bookSpace, bookPiecemeal, listAvailability } from "./libcal/book.js";
+import { suggestBookingOptions } from "./libcal/planner.js";
 import { SPACE_CATEGORIES, DEFAULT_CATEGORY } from "./libcal/constants.js";
 import { addToAppleCalendar, listCalendars } from "./calendar/apple.js";
 
@@ -18,10 +18,12 @@ const categoryIds = Object.keys(SPACE_CATEGORIES).join(", ");
 
 const AGENT_BOOKING_RULES = `
 BOOKING WORKFLOW (required):
-1. For open-ended requests ("book a room", "max hours", "soonest available") → call libcal_suggest FIRST.
-2. Present numbered options to the user. Explain the recommended option (usually same-day if available).
-3. Only call libcal_book after the user picks an option (or gives explicit date+time).
-4. Never auto-book a far-future date when sooner options exist.
+1. For ANY booking request → call libcal_suggest FIRST. It compares all strategies automatically:
+   single-cube in the requested window, piecemeal multi-cube, partial-window fits, and alternate times/days.
+2. Pass window_start/window_end when the user gives a range (e.g. "11-1", "11am to 2pm").
+3. Present the ranked options with the recommended one marked. Explain tradeoffs briefly.
+4. Single-segment options → libcal_book. Multi-segment piecemeal → libcal_book_piecemeal.
+5. Only book after the user picks an option. Never auto-book.
 `.trim();
 
 const AGENT_CANCELLATION_RULES = `
@@ -55,7 +57,7 @@ server.tool(
 
 server.tool(
   "libcal_suggest",
-  `Find ranked booking options with same-day priority. Use BEFORE booking when the user has not given an exact date+time. ${AGENT_BOOKING_RULES} Categories: ${categoryIds}`,
+  `Find the best booking plan across ALL cubes and strategies (single-cube, piecemeal, partial-window, alternate times). ALWAYS use this before booking. ${AGENT_BOOKING_RULES} Categories: ${categoryIds}`,
   {
     duration_minutes: z
       .number()
@@ -63,7 +65,15 @@ server.tool(
       .min(30)
       .max(180)
       .optional()
-      .describe("Desired length in minutes (default 60; use 180 for max/LibCal limit)"),
+      .describe("Desired length in minutes when no window is given (default 60; use 180 for max)"),
+    window_start: z
+      .string()
+      .optional()
+      .describe('Start of requested window: HH:MM or hour like 11. Use with window_end for ranges like "11-1".'),
+    window_end: z
+      .string()
+      .optional()
+      .describe("End of requested window: HH:MM or hour like 13 / 1 (pm inferred if before start)"),
     category: z
       .string()
       .optional()
@@ -71,7 +81,7 @@ server.tool(
     preferred_date: z
       .string()
       .optional()
-      .describe("User's preferred date YYYY-MM-DD (optional, boosts ranking)"),
+      .describe("User's preferred date YYYY-MM-DD (default today when a window is given)"),
     preferred_start_time: z
       .string()
       .optional()
@@ -90,6 +100,8 @@ server.tool(
   },
   async ({
     duration_minutes,
+    window_start,
+    window_end,
     category,
     preferred_date,
     preferred_start_time,
@@ -105,6 +117,8 @@ server.tool(
       durationMinutes: duration,
       preferredDate: preferred_date,
       preferredStartTime: preferred_start_time,
+      windowStart: window_start,
+      windowEnd: window_end,
       maxOptions: max_options,
       prefs: {
         preferSameDay: prefer_same_day ?? config.preferSameDay ?? true,
@@ -114,12 +128,44 @@ server.tool(
     });
 
     return {
-      content: [
-        {
-          type: "text",
-          text: message + `\n\n(Duration: ${formatDurationHint(duration)})`,
-        },
-      ],
+      content: [{ type: "text", text: message }],
+      structuredContent: { options },
+    };
+  },
+);
+
+server.tool(
+  "libcal_analyze_window",
+  `Alias for libcal_suggest with a time window on a specific date. Prefer libcal_suggest directly. ${AGENT_BOOKING_RULES} Categories: ${categoryIds}`,
+  {
+    date: z.string().describe("Date to check, YYYY-MM-DD"),
+    window_start: z.string().describe("Window start: HH:MM (24h) or hour like 11"),
+    window_end: z.string().describe("Window end: HH:MM (24h) or hour like 13 / 1 (pm inferred if before start)"),
+    category: z
+      .string()
+      .optional()
+      .describe(`Space category id (default: ${DEFAULT_CATEGORY})`),
+    max_plans: z
+      .number()
+      .int()
+      .min(1)
+      .max(10)
+      .optional()
+      .describe("How many options to return (default 5)"),
+  },
+  async ({ date, window_start, window_end, category, max_plans }) => {
+    const categoryId = category ?? loadConfig().defaultCategory;
+    const { options, message } = await suggestBookingOptions({
+      categoryId,
+      durationMinutes: 120,
+      preferredDate: date,
+      windowStart: window_start,
+      windowEnd: window_end,
+      maxOptions: max_plans,
+    });
+
+    return {
+      content: [{ type: "text", text: message }],
       structuredContent: { options },
     };
   },
@@ -276,6 +322,112 @@ server.tool(
     return {
       content: [{ type: "text", text: summary }],
       isError: !result.success,
+    };
+  },
+);
+
+server.tool(
+  "libcal_book_piecemeal",
+  `Book multiple cube segments that together cover a time window. Use after libcal_analyze_window when the user confirms a piecemeal plan. ${AGENT_BOOKING_RULES} ${AGENT_LOGIN_RULES} ${AGENT_CANCELLATION_RULES} Requires user_confirmed=true.`,
+  {
+    date: z.string().describe("Booking date YYYY-MM-DD"),
+    segments: z
+      .array(
+        z.object({
+          start_time: z.string().describe("Segment start HH:MM"),
+          duration_minutes: z.number().int().min(30).max(180).describe("Segment length in minutes"),
+          space_id: z.number().int().describe("LibCal item/space id for this segment"),
+        }),
+      )
+      .min(1)
+      .describe("Ordered booking segments from libcal_analyze_window plan"),
+    user_confirmed: z
+      .boolean()
+      .describe("Must be true — confirms the user explicitly chose this piecemeal plan"),
+    category: z
+      .string()
+      .optional()
+      .describe(`Space category id (default: ${DEFAULT_CATEGORY})`),
+    add_to_calendar: z
+      .boolean()
+      .optional()
+      .describe("Add each segment to Apple Calendar after booking (default true)"),
+  },
+  async ({ date, segments, user_confirmed, category, add_to_calendar }) => {
+    if (!user_confirmed) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              "Booking blocked: user_confirmed must be true.\n\n" +
+              "Call libcal_analyze_window, show piecemeal options, and only book after the user picks one.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const config = loadConfig();
+    const categoryId = category ?? config.defaultCategory;
+
+    const auth = await checkSessionValid();
+    if (!auth.valid) {
+      return {
+        content: [{ type: "text", text: `${auth.message}\n\n${LOGIN_SETUP_HINT}` }],
+        isError: true,
+      };
+    }
+
+    const windowSegments = segments.map((segment) => ({
+      itemId: segment.space_id,
+      startTime: segment.start_time,
+      endTime: "",
+      durationMinutes: segment.duration_minutes,
+    }));
+
+    const { results, message } = await withAuthenticatedContext(
+      (context) =>
+        bookPiecemeal(context, {
+          categoryId,
+          date,
+          segments: windowSegments,
+          purpose: config.bookingPurpose,
+        }),
+      { persistSession: true },
+    );
+
+    let calendarMessage = "";
+    if (add_to_calendar !== false) {
+      const notes: string[] = [];
+      for (const result of results) {
+        const cal = await addToAppleCalendar({
+          calendarName: config.calendarName ?? "Calendar",
+          title: result.spaceName,
+          start: result.start,
+          end: result.end,
+          location: result.location,
+          notes: `UNC LibCal booking. ${result.confirmationUrl ?? ""}`.trim(),
+        });
+        notes.push(cal.message);
+      }
+      calendarMessage = notes.join("\n");
+    }
+
+    const summary = [
+      "Piecemeal booking complete!",
+      "",
+      message,
+      calendarMessage ? `\nCalendar:\n${calendarMessage}` : "",
+      "",
+      "To cancel later: use the link in each confirmation email from alerts@mail.libcal.com.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return {
+      content: [{ type: "text", text: summary }],
+      isError: false,
     };
   },
 );

@@ -1,13 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  assertCheckoutHoldMatches,
   calendarStepDirection,
   findSlotAtTime,
   isBookingConfirmed,
-  optionMatchesEndTime,
-  parseBookingTimesFromHtml,
   parseResourceItemId,
   pickEndTimeOption,
+  resolveTargetCenterX,
   SLOT_MATCH_TOLERANCE_PX,
 } from "../libcal/browser.js";
 
@@ -53,6 +53,58 @@ describe("isBookingConfirmed", () => {
     );
     assert.equal(isBookingConfirmed("<p>Still loading...</p>"), false);
   });
+
+  it("rejects the pre-submit hold page", () => {
+    assert.equal(
+      isBookingConfirmed(
+        "Booking Details\nThese times will be held for you until 10:29am.\nContinue to Complete Your Booking",
+      ),
+      false,
+    );
+  });
+});
+
+describe("assertCheckoutHoldMatches", () => {
+  it("accepts matching checkout hold", () => {
+    assert.doesNotThrow(() =>
+      assertCheckoutHoldMatches(
+        {
+          spaceName: "Cube 6",
+          fromLabel: "12:00pm Monday, August 31, 2026",
+          toLabel: "3:00pm Monday, August 31, 2026",
+        },
+        { startLabel: "12:00pm", endLabel: "3:00pm", durationMinutes: 180 },
+      ),
+    );
+  });
+
+  it("accepts holds when the table has a leading image column", () => {
+    assert.doesNotThrow(() =>
+      assertCheckoutHoldMatches(
+        {
+          spaceName: "Cube 4",
+          fromLabel: "11:30am Monday, August 31, 2026",
+          toLabel: "1:00pm Monday, August 31, 2026",
+        },
+        { startLabel: "11:30am", endLabel: "1:00pm", durationMinutes: 90 },
+      ),
+    );
+  });
+
+  it("rejects a 30-minute default hold", () => {
+    assert.throws(
+      () =>
+        assertCheckoutHoldMatches(
+          {
+            spaceName: "Cube 6",
+            fromLabel: "12:00pm Monday, August 31, 2026",
+            toLabel: "12:30pm Monday, August 31, 2026",
+          },
+          { startLabel: "12:00pm", endLabel: "3:00pm", durationMinutes: 180 },
+        ),
+      /Checkout end is/,
+    );
+  });
 });
 
 describe("pickEndTimeOption", () => {
@@ -73,26 +125,6 @@ describe("pickEndTimeOption", () => {
 
   it("handles empty options", () => {
     assert.equal(pickEndTimeOption([], "1:00pm"), null);
-  });
-
-  it("does not fuzzy-match shorter times inside longer labels", () => {
-    const options = ["11:30am Friday, August 28, 2026", "1:00pm Friday, August 28, 2026"];
-    assert.equal(pickEndTimeOption(options, "1:00pm"), "1:00pm Friday, August 28, 2026");
-    assert.equal(pickEndTimeOption(options, "11:30am"), "11:30am Friday, August 28, 2026");
-  });
-});
-
-describe("optionMatchesEndTime", () => {
-  it("matches option prefixes only", () => {
-    assert.equal(optionMatchesEndTime("1:00pm Friday, August 28, 2026", "1:00pm"), true);
-    assert.equal(optionMatchesEndTime("11:30am Friday, August 28, 2026", "1:00pm"), false);
-  });
-});
-
-describe("parseBookingTimesFromHtml", () => {
-  it("parses from/to confirmation copy", () => {
-    const html = "<p>From: 11:00am to 1:00pm on Tuesday, September 1, 2026</p>";
-    assert.deepEqual(parseBookingTimesFromHtml(html), { start: "11:00", end: "13:00" });
   });
 });
 
@@ -126,5 +158,12 @@ describe("findSlotAtTime", () => {
   it("is case-insensitive on header label", () => {
     const hit = findSlotAtTime(headers, slots, "11:00AM");
     assert.ok(hit);
+  });
+
+  it("interpolates half-hour times between headers", () => {
+    const targetX = resolveTargetCenterX(headers, "11:30am");
+    assert.equal(targetX, 350);
+    const hit = findSlotAtTime(headers, slots, "11:30am", SLOT_MATCH_TOLERANCE_PX);
+    assert.equal(hit?.room, "Cube 2");
   });
 });

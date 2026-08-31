@@ -36,8 +36,7 @@ npm test
 
 - **`~/Projects/unc-libcal-mcp`** — the project (clone from GitHub)
 - **`~/.unc-libcal/`** — your private session + config (never commit this)
-  - `browser-profile/` — persistent Chromium profile (keeps SSO cookies alive between bookings)
-  - `storage-state.json` — backup cookie export (legacy; auto-migrated on first use)
+  - `storage-state.json` — saved login cookies from `npm run login`
 
 Skip to [step 2](#2-log-in-to-libcal) if you've logged in before, or re-run login if booking fails.
 
@@ -58,16 +57,15 @@ npm test
 npm run login
 ```
 
-A browser opens to the **Davis cubes page** (public — no Onyen prompt until you click a slot).
+A browser opens to the **Davis cubes page** (this is normal — the calendar is public and does not ask for Onyen immediately).
 
-**Manual steps in the browser:**
-1. Click any open slot → pick an end time → **Submit Times**
-2. Sign in with Onyen (+ Duo)
-3. Wait until you see **Logout** on LibCal
+The script auto-clicks a test slot and opens **UNC Onyen**. Sign in (+ Duo if prompted).
 
-**Do not click "Submit my Booking"** on the checkout page — that completes a real reservation. Press **Enter** in the terminal once Logout appears.
+You may land on **Booking Details** with a held test slot — that is normal. **Do not click "Submit my Booking".**
 
-Your session is saved to `~/.unc-libcal/browser-profile/` (never commit this). LibCal's `auth_id` token typically lasts ~24 hours; UNC SSO may expire sooner after inactivity — re-run `npm run login` when `libcal_auth_status` reports expired.
+Press **Enter** in the terminal. The script clears the held slot and returns you to the Davis cubes calendar where **Logout** should appear.
+
+Your session is saved to `~/.unc-libcal/storage-state.json` (never commit this file).
 
 ### 3. Configure (optional)
 
@@ -209,11 +207,10 @@ You should see `libcal_auth_status`, `libcal_suggest`, `libcal_check_availabilit
 
 | Problem | Fix |
 |---|---|
-| `npm run login` opens cubes page, no Onyen prompt | **Normal.** Click a slot → Submit Times → Onyen login. Do **not** click Submit my Booking |
-| Accidental booking during login | Cancel via the link in your confirmation email from `alerts@mail.libcal.com` |
-| `libcal_auth_status` says not logged in | Run `npm run login` (see above). Check `authIdExpires` in the status response. |
-| Session expires quickly | Normal for UNC SSO — the MCP now reuses one browser profile instead of relaunching fresh browsers each call. Re-login if needed. |
-| Login saved but booking redirects to SSO | Re-run `npm run login` — you pressed Enter before seeing **Logout** |
+| `npm run login` opens cubes page, no Onyen prompt | Wait — the script auto-clicks a slot and Submit Times to reach Onyen |
+| `libcal_auth_status` says not logged in | Run `npm run login` (see above) |
+| Session expires quickly | Normal for UNC SSO — re-run `npm run login` when booking fails |
+| Login saved but booking redirects to SSO | Re-run `npm run login` — press Enter only after you see Logout on LibCal |
 | `libcal_book` fails after suggest | Slot was taken — run `libcal_suggest` again |
 | MCP tools don't appear in Claude Desktop | Fully quit (Cmd+Q) and reopen; confirm `mcpServers` path points to `dist/index.js` |
 
