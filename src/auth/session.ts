@@ -1,5 +1,5 @@
 import { chromium, type BrowserContext } from "playwright";
-import { ensureDataDir, SESSION_PATH as DEFAULT_SESSION_PATH } from "../config.js";
+import { ensureDataDir, secureFile, SESSION_PATH as DEFAULT_SESSION_PATH } from "../config.js";
 
 const SESSION_PATH = process.env.SESSION_PATH ?? DEFAULT_SESSION_PATH;
 import { BASE_URL } from "../libcal/constants.js";
@@ -116,6 +116,7 @@ export async function finishLoginOnCalendar(
   }
 
   await context.storageState({ path: SESSION_PATH });
+  secureFile(SESSION_PATH);
 
   const removed = await abandonHeldBookings(page).catch(() => 0);
   if (removed > 0) {
@@ -174,6 +175,7 @@ export async function runLoginFlow(): Promise<void> {
   }
 
   await context.storageState({ path: SESSION_PATH });
+  secureFile(SESSION_PATH);
   await browser.close();
 
   console.log(`Session saved to ${SESSION_PATH}`);
@@ -212,6 +214,7 @@ export async function withAuthenticatedContext<T>(
   } finally {
     if (options?.persistSession) {
       await context.storageState({ path: SESSION_PATH });
+      secureFile(SESSION_PATH);
     }
     await browser.close();
   }
