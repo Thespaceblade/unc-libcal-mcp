@@ -212,11 +212,20 @@ export async function withAuthenticatedContext<T>(
   try {
     return await fn(context);
   } finally {
-    if (options?.persistSession) {
-      await context.storageState({ path: SESSION_PATH });
-      secureFile(SESSION_PATH);
+    // Persisting the session must never mask fn's result. A throw here would
+    // replace a *successful booking* with an error and skip browser.close(),
+    // leaving the user to rebook and burn their 180-minute daily limit.
+    try {
+      if (options?.persistSession) {
+        await context.storageState({ path: SESSION_PATH });
+        secureFile(SESSION_PATH);
+      }
+    } catch (error) {
+      // stderr only: stdout is the MCP JSON-RPC channel.
+      console.error(`Could not persist session to ${SESSION_PATH}:`, error);
+    } finally {
+      await browser.close().catch(() => undefined);
     }
-    await browser.close();
   }
 }
 
