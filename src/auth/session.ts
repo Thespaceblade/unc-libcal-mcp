@@ -1,3 +1,4 @@
+import { renameSync } from "node:fs";
 import { chromium, type BrowserContext } from "playwright";
 import { ensureDataDir, secureFile, SESSION_PATH as DEFAULT_SESSION_PATH } from "../config.js";
 
@@ -115,9 +116,9 @@ export async function finishLoginOnCalendar(
     return { valid: false, message: `Expected calendar.lib.unc.edu after login (got ${page.url()}).` };
   }
 
-  await context.storageState({ path: SESSION_PATH });
-  secureFile(SESSION_PATH);
-
+  // Deliberately no save here. Landing on calendar.lib.unc.edu proves nothing:
+  // that page is public, so an unauthenticated context reaches this line too.
+  // The session is only written once verifyBookingSession() below succeeds.
   const removed = await abandonHeldBookings(page).catch(() => 0);
   if (removed > 0) {
     console.log(`Cleared ${removed} held test slot(s) from checkout.`);
@@ -131,6 +132,13 @@ export async function finishLoginOnCalendar(
 
   const verified = await verifyBookingSession(context);
   if (verified) {
+    // Stage then rename: a failed re-login must never leave the user worse off
+    // than before they ran it, so the existing session file is replaced only
+    // once the new one is known to work.
+    const staged = `${SESSION_PATH}.tmp`;
+    await context.storageState({ path: staged });
+    secureFile(staged);
+    renameSync(staged, SESSION_PATH);
     console.log("Session verified — booking auth works.\n");
     return { valid: true, message: "Session is active" };
   }
@@ -174,8 +182,7 @@ export async function runLoginFlow(): Promise<void> {
     process.exit(1);
   }
 
-  await context.storageState({ path: SESSION_PATH });
-  secureFile(SESSION_PATH);
+  // finishLoginOnCalendar already wrote the verified session; no second write.
   await browser.close();
 
   console.log(`Session saved to ${SESSION_PATH}`);
