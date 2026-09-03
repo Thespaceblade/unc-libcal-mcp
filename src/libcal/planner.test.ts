@@ -7,7 +7,15 @@ import {
   scoreOption,
 } from "../libcal/planner.js";
 import { LibCalClient } from "../libcal/client.js";
+import { localDateString } from "../libcal/time.js";
 import type { AvailabilitySlot } from "../libcal/types.js";
+
+/** Tomorrow, as YYYY-MM-DD. */
+function tomorrow(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return localDateString(d);
+}
 
 function slot(
   date: string,
@@ -150,7 +158,11 @@ describe("formatDurationHint", () => {
 
 describe("recommendBookingPlans", () => {
   it("ranks partial window coverage above alternate times on the same day", async () => {
-    const date = "2026-08-31";
+    // recommendBookingPlans always searches forward from today, so the fixture
+    // date has to move with the clock. Use tomorrow rather than today: for a
+    // non-today date the planner applies no minLeadMinutes cutoff, which keeps
+    // the assertions below independent of what time of day the suite runs.
+    const date = tomorrow();
     const slots: AvailabilitySlot[] = [
       slot(date, "11:30", "12:00", 6),
       slot(date, "12:00", "12:30", 6),
@@ -172,7 +184,7 @@ describe("recommendBookingPlans", () => {
         windowStart: "11",
         windowEnd: "1",
         maxOptions: 5,
-        prefs: { searchHorizonDays: 1, minLeadMinutes: 0, preferSameDay: true },
+        prefs: { searchHorizonDays: 2, minLeadMinutes: 0, preferSameDay: true },
       });
 
       assert.ok(plans.length >= 2);
