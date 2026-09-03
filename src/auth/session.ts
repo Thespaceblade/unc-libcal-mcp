@@ -70,16 +70,42 @@ export function sessionProbeResult(
   };
 }
 
+/**
+ * Non-mutating session probe: load the public calendar and look for Logout.
+ *
+ * This must never click a slot or submit times. libcal_auth_status advertises
+ * itself as a read-only status check, and libcal_book calls this before every
+ * booking — holding a real cube just to answer "am I signed in?" takes
+ * inventory from other students, and the hold leaks whenever cleanup fails.
+ *
+ * A stale-but-present SSO cookie can read as valid here. That is deliberate:
+ * the booking path already detects it and throws "Redirected to SSO during
+ * checkout — session expired" (see completeCheckout), so the cost of a false
+ * positive is one clear error at booking time rather than a spurious hold on
+ * every status check.
+ */
 export async function probeAuthenticatedContext(
   context: BrowserContext,
 ): Promise<{ valid: boolean; message: string }> {
-  const ok = await verifyBookingSession(context);
-  return ok
-    ? { valid: true, message: "Session is active" }
-    : { valid: false, message: `Not logged in. ${LOGIN_SETUP_HINT}` };
+  const page = await context.newPage();
+  try {
+    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1000);
+    const hasLogout = (await page.getByRole("link", { name: /logout/i }).count()) > 0;
+    return sessionProbeResult(page.url(), hasLogout);
+  } finally {
+    await page.close();
+  }
 }
 
-/** Submit Times on an open slot — confirms SSO cookies work for booking. */
+/**
+ * Submit Times on an open slot — confirms SSO cookies work for booking.
+ *
+ * This DOES place a real hold on a real cube, so it belongs only in the
+ * explicit `npm run login` flow, where the user has knowingly started a login
+ * and the hold is cleaned up before we return. Never call it from a status
+ * check or from the pre-flight of a booking; use probeAuthenticatedContext().
+ */
 export async function verifyBookingSession(context: BrowserContext): Promise<boolean> {
   await clearBookingCartCookies(context);
   const page = await context.newPage();
@@ -97,7 +123,20 @@ export async function verifyBookingSession(context: BrowserContext): Promise<boo
     await page.waitForTimeout(1000);
 
     const ok = page.url().includes("/spaces/auth") && !page.url().includes("sso.unc.edu");
-    if (ok) await abandonHeldBookings(page).catch(() => 0);
+    // Release the hold whether or not the check passed, and say so if we
+    // cannot — a silently leaked hold eats the user's 3-hour daily limit and
+    // takes a cube away from someone else.
+    try {
+      await abandonHeldBookings(page);
+    } catch (error) {
+      console.error(
+        "Could not release the LibCal hold created while verifying login. " +
+          "Check your bookings and cancel via the confirmation email if one was kept:",
+        error,
+      );
+    } finally {
+      await clearBookingCartCookies(context);
+    }
     return ok;
   } finally {
     await page.close();
