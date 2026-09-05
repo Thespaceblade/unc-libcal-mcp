@@ -292,6 +292,16 @@ npm test         # unit + integration tests
 npm run dev      # build and start MCP server on stdio
 ```
 
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup details, project layout, PR expectations, and how to report bugs.
+
+## Contributing
+
+Issues and PRs are welcome. For anything beyond a small docs/test fix, open an issue first so we can agree on the approach.
+
+1. Fork (or branch) → `npm install` → `npx playwright install chromium` → `npm test`
+2. Keep changes focused; add tests for behavior changes
+3. Never commit `~/.unc-libcal/` session files or credentials
+
 ## Caveats
 
 - Personal automation tool — use responsibly and follow UNC Library policies
