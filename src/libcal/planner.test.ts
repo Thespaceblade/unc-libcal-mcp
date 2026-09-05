@@ -8,6 +8,7 @@ import {
 } from "../libcal/planner.js";
 import { LibCalClient } from "../libcal/client.js";
 import type { AvailabilitySlot } from "../libcal/types.js";
+import { localDateString } from "../libcal/time.js";
 
 function slot(
   date: string,
@@ -150,7 +151,10 @@ describe("formatDurationHint", () => {
 
 describe("recommendBookingPlans", () => {
   it("ranks partial window coverage above alternate times on the same day", async () => {
-    const date = "2026-08-31";
+    // Use tomorrow so min-lead filtering for "today" never empties the fixture.
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const date = localDateString(tomorrow);
     const slots: AvailabilitySlot[] = [
       slot(date, "11:30", "12:00", 6),
       slot(date, "12:00", "12:30", 6),
@@ -172,7 +176,7 @@ describe("recommendBookingPlans", () => {
         windowStart: "11",
         windowEnd: "1",
         maxOptions: 5,
-        prefs: { searchHorizonDays: 1, minLeadMinutes: 0, preferSameDay: true },
+        prefs: { searchHorizonDays: 2, minLeadMinutes: 0, preferSameDay: true },
       });
 
       assert.ok(plans.length >= 2);
