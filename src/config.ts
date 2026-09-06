@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { UserConfig } from "./libcal/types.js";
@@ -9,9 +9,29 @@ export const CONFIG_PATH = join(DATA_DIR, "config.json");
 export const SESSION_PATH = join(DATA_DIR, "storage-state.json");
 export const BROWSER_PROFILE_DIR = join(DATA_DIR, "browser-profile");
 
+/**
+ * The data dir holds live UNC SSO cookies, so it must not be world-readable.
+ * Existing installs are tightened too — they were created 0755 before this.
+ */
 export function ensureDataDir(): void {
   if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    return;
+  }
+  try {
+    chmodSync(DATA_DIR, 0o700);
+  } catch {
+    // Non-fatal: a dir we cannot chmod is still usable, just less private.
+  }
+}
+
+/** Restrict a file holding session credentials to the owner (0600). */
+export function secureFile(path: string): void {
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Non-fatal: the file may not exist yet, or live on a filesystem
+    // without POSIX modes. Never let this mask the caller's real work.
   }
 }
 
