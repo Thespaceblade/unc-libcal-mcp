@@ -1,0 +1,17 @@
+# Source and dev files (dist/ is the runtime entry point)
+src/
+.cursor/
+tests/
+*.test.ts
+*.test.js
+
+# Git and local config
+.git/
+.DS_Store
+*.log
+.env
+.env.*
+
+# Playwright cache (browsers are installed separately)
+playwright-report/
+test-results/

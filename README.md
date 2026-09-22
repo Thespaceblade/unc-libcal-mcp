@@ -29,12 +29,12 @@ The server will:
 If you already have the repo and `~/.unc-libcal/`:
 
 ```bash
-cd ~/Projects/unc-libcal-mcp   # or wherever you cloned it
+cd ~/Personal\ Code\ Projects/MCPs/unc-libcal-mcp
 npm run build
 npm test
 ```
 
-- **`~/Projects/unc-libcal-mcp`** — the project (clone from GitHub)
+- **`~/Personal Code Projects/MCPs/unc-libcal-mcp`** — the project (clone from GitHub)
 - **`~/.unc-libcal/`** — your private session + config (never commit this)
   - `storage-state.json` — saved login cookies from `npm run login`
 
@@ -50,6 +50,16 @@ npx playwright install chromium
 npm run build
 npm test
 ```
+
+### Claude Desktop (.mcpb)
+
+Package for one-click install:
+
+```bash
+npm run pack:mcpb
+```
+
+Then double-click `unc-libcal-mcp.mcpb` or drag it into Claude Desktop Settings. You still need to run `node dist/login.js` once to save your Onyen session to `~/.unc-libcal/`.
 
 ### 2. Log in to LibCal
 

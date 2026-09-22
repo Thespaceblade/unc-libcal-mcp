@@ -1,0 +1,66 @@
+{
+  "manifest_version": "0.3",
+  "name": "unc-libcal-mcp",
+  "display_name": "UNC LibCal",
+  "version": "0.3.0",
+  "description": "Book UNC Davis Library study rooms and cubicles from your AI assistant.",
+  "long_description": "MCP server for booking [UNC Davis Library](https://calendar.lib.unc.edu) study spaces.\n\n**Before booking:** run the login helper once from a terminal to save your Onyen session to `~/.unc-libcal/`:\n\n```bash\ncd <install-dir> && node dist/login.js\n```\n\nThen use `libcal_auth_status` to confirm the session is valid.\n\nBuilt for UNC students, faculty, and staff. Not affiliated with or endorsed by UNC Libraries.",
+  "author": {
+    "name": "Jason Charwin",
+    "url": "https://github.com/Thespaceblade"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Thespaceblade/unc-libcal-mcp.git"
+  },
+  "homepage": "https://github.com/Thespaceblade/unc-libcal-mcp",
+  "documentation": "https://github.com/Thespaceblade/unc-libcal-mcp#readme",
+  "support": "https://github.com/Thespaceblade/unc-libcal-mcp/issues",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"]
+    }
+  },
+  "tools": [
+    {
+      "name": "libcal_auth_status",
+      "description": "Check whether the saved UNC LibCal Onyen session is valid."
+    },
+    {
+      "name": "libcal_suggest",
+      "description": "Find the best booking plan across cubes, piecemeal slots, and alternate times."
+    },
+    {
+      "name": "libcal_analyze_window",
+      "description": "Analyze availability for a specific time window without booking."
+    },
+    {
+      "name": "libcal_check_availability",
+      "description": "List available spaces for a date, time, and duration."
+    },
+    {
+      "name": "libcal_book",
+      "description": "Book a single contiguous study space after the user confirms."
+    },
+    {
+      "name": "libcal_book_piecemeal",
+      "description": "Book multiple back-to-back segments when no single cube fits."
+    },
+    {
+      "name": "libcal_list_calendars",
+      "description": "List Apple Calendar calendars for optional event creation."
+    }
+  ],
+  "keywords": ["mcp", "unc", "libcal", "library", "booking", "davis", "study-room"],
+  "license": "MIT",
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

@@ -8,3 +8,4 @@ dist/
 *.key
 .unc-libcal/
 storage-state.json
+*.mcpb
